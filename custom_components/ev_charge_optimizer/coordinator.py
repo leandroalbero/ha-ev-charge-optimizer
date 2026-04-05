@@ -215,19 +215,29 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._readings.append(grid_export)
 
         power_buffer = float(self._opt(CONF_POWER_BUFFER, DEFAULT_POWER_BUFFER))
-        available_power = self._rolling_average() - power_buffer
+        solar_surplus = self._rolling_average() - power_buffer
+        voltage = self._get_voltage()
+        grid_capacity = self._get_grid_available_amps() * voltage
 
         # Mode dispatch
         if self.mode == ChargeMode.SOLAR_ONLY:
-            target = self._calculate_solar_only(available_power)
+            target = self._calculate_solar_only(solar_surplus)
+            available_power = solar_surplus
         elif self.mode == ChargeMode.MAX_SOLAR_GRID:
             target = self._calculate_max_grid()
+            available_power = grid_capacity
         elif self.mode == ChargeMode.VALLEY:
-            target = self._calculate_valley(available_power)
+            target = self._calculate_valley(solar_surplus)
+            available_power = grid_capacity if self._is_valley_time() else solar_surplus
         elif self.mode == ChargeMode.MIN_SOLAR_TOPUP:
-            target = self._calculate_min_topup(available_power)
+            target = self._calculate_min_topup(solar_surplus)
+            guaranteed_power = float(
+                self._opt(CONF_GUARANTEED_MIN_AMPS, DEFAULT_GUARANTEED_MIN_AMPS)
+            ) * voltage
+            available_power = max(solar_surplus, guaranteed_power)
         else:
             target = 0
+            available_power = 0
 
         # Clamp to min/max
         target = max(0, min(target, self.max_amps))
