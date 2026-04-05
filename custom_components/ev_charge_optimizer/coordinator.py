@@ -56,7 +56,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Initialize the coordinator."""
         self._entry = entry
         self._readings: deque[float] = deque(
-            maxlen=self._opt(CONF_ROLLING_WINDOW, DEFAULT_ROLLING_WINDOW)
+            maxlen=int(self._opt(CONF_ROLLING_WINDOW, DEFAULT_ROLLING_WINDOW))
         )
         self._last_target: float = 0
         self.enabled: bool = True
@@ -66,7 +66,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.min_amps: float = self._opt(CONF_MIN_AMPS, DEFAULT_MIN_AMPS)
         self.max_amps: float = self._opt(CONF_MAX_AMPS, DEFAULT_MAX_AMPS)
 
-        interval = self._opt(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
+        interval = int(self._opt(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL))
         super().__init__(
             hass,
             _LOGGER,
