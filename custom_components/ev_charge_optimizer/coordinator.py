@@ -227,8 +227,9 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Clamp to min/max
         target = max(0, min(target, self.max_amps))
 
-        # Apply step limiting
-        target = self._apply_step_limit(target)
+        # Apply step limiting only for solar-based modes (prevents oscillation)
+        if self.mode in (ChargeMode.SOLAR_ONLY, ChargeMode.MIN_SOLAR_TOPUP):
+            target = self._apply_step_limit(target)
 
         # Below minimum → stop charging
         if target < self.min_amps:
