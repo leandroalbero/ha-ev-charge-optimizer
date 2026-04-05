@@ -1,0 +1,10 @@
+{
+  "domain": "ev_charge_optimizer",
+  "name": "EV Charge Optimizer",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/leandro-mana/ha-ev-charge-optimizer",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/leandro-mana/ha-ev-charge-optimizer/issues",
+  "version": "1.0.0"
+}

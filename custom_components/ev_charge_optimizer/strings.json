@@ -1,0 +1,60 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Power Sensors",
+        "description": "Select the sensor entities that measure your power flow.",
+        "data": {
+          "grid_export_sensor": "Grid Export Power Sensor",
+          "solar_production_sensor": "Solar Production Sensor",
+          "house_consumption_sensor": "House Consumption Sensor"
+        }
+      },
+      "charger": {
+        "title": "Charger Control",
+        "description": "Select the number entity that controls your charger's amperage.",
+        "data": {
+          "charger_number_entity": "Charger Amps Entity"
+        }
+      },
+      "voltage": {
+        "title": "Voltage Configuration",
+        "description": "Optionally select a voltage sensor, or set a static voltage value.",
+        "data": {
+          "voltage_sensor": "Voltage Sensor (optional)",
+          "static_voltage": "Static Voltage (V)"
+        }
+      },
+      "basics": {
+        "title": "Basic Settings",
+        "description": "Configure amperage limits and default charging mode.",
+        "data": {
+          "min_amps": "Minimum Amps",
+          "max_amps": "Maximum Amps",
+          "default_mode": "Default Charging Mode"
+        }
+      }
+    },
+    "error": {
+      "min_amps_exceeds_max": "Minimum amps must be less than maximum amps."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Tuning Parameters",
+        "description": "Adjust the regulation algorithm and mode-specific settings.",
+        "data": {
+          "update_interval": "Update Interval",
+          "power_buffer": "Power Buffer (hysteresis)",
+          "rolling_window": "Rolling Average Window",
+          "max_step": "Max Amps Change Per Cycle",
+          "valley_start": "Valley Start Time",
+          "valley_end": "Valley End Time",
+          "valley_amps": "Valley Charging Amps",
+          "guaranteed_min_amps": "Guaranteed Min Amps (Top-up mode)"
+        }
+      }
+    }
+  }
+}
