@@ -31,6 +31,7 @@
         "data": {
           "min_amps": "Minimum Amps",
           "max_amps": "Maximum Amps",
+          "grid_max_power": "Grid Max Power (W)",
           "default_mode": "Default Charging Mode"
         }
       }
@@ -52,7 +53,8 @@
           "valley_start": "Valley Start Time",
           "valley_end": "Valley End Time",
           "valley_amps": "Valley Charging Amps",
-          "guaranteed_min_amps": "Guaranteed Min Amps (Top-up mode)"
+          "guaranteed_min_amps": "Guaranteed Min Amps (Top-up mode)",
+          "grid_max_power": "Grid Max Power (W)"
         }
       }
     }

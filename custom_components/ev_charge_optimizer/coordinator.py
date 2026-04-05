@@ -14,7 +14,9 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .const import (
     CONF_CHARGER_NUMBER_ENTITY,
     CONF_GRID_EXPORT_SENSOR,
+    CONF_GRID_MAX_POWER,
     CONF_GUARANTEED_MIN_AMPS,
+    CONF_HOUSE_CONSUMPTION_SENSOR,
     CONF_MAX_AMPS,
     CONF_MAX_STEP,
     CONF_MIN_AMPS,
@@ -26,6 +28,7 @@ from .const import (
     CONF_VALLEY_END,
     CONF_VALLEY_START,
     CONF_VOLTAGE_SENSOR,
+    DEFAULT_GRID_MAX_POWER,
     DEFAULT_GUARANTEED_MIN_AMPS,
     DEFAULT_MAX_AMPS,
     DEFAULT_MAX_STEP,
@@ -117,6 +120,20 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Overnight window (e.g., 23:00 - 07:00)
         return now >= start or now <= end
 
+    def _get_grid_available_amps(self) -> float:
+        """Calculate max amps available from grid without overloading."""
+        voltage = self._get_voltage()
+        if voltage <= 0:
+            return 0
+        grid_max_power = float(
+            self._opt(CONF_GRID_MAX_POWER, DEFAULT_GRID_MAX_POWER)
+        )
+        house_consumption = self._get_sensor_value(
+            self._entry.data.get(CONF_HOUSE_CONSUMPTION_SENSOR)
+        ) or 0
+        available_watts = grid_max_power - house_consumption
+        return max(0, available_watts / voltage)
+
     def _calculate_solar_only(self, available_power: float) -> float:
         """Solar Only: charge from surplus only."""
         voltage = self._get_voltage()
@@ -125,13 +142,14 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return available_power / voltage
 
     def _calculate_max_grid(self) -> float:
-        """Max Solar + Grid: always charge at max."""
-        return self.max_amps
+        """Max Solar + Grid: charge at max without exceeding grid capacity."""
+        return min(self.max_amps, self._get_grid_available_amps())
 
     def _calculate_valley(self, available_power: float) -> float:
         """Valley: charge at configured amps during off-peak, solar otherwise."""
         if self._is_valley_time():
-            return float(self._opt(CONF_VALLEY_AMPS, DEFAULT_VALLEY_AMPS))
+            valley_amps = float(self._opt(CONF_VALLEY_AMPS, DEFAULT_VALLEY_AMPS))
+            return min(valley_amps, self._get_grid_available_amps())
         return self._calculate_solar_only(available_power)
 
     def _calculate_min_topup(self, available_power: float) -> float:
@@ -140,7 +158,8 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         guaranteed = float(
             self._opt(CONF_GUARANTEED_MIN_AMPS, DEFAULT_GUARANTEED_MIN_AMPS)
         )
-        return max(solar_amps, guaranteed)
+        grid_cap = self._get_grid_available_amps()
+        return min(max(solar_amps, guaranteed), grid_cap)
 
     def _apply_step_limit(self, target: float) -> float:
         """Limit amps change per cycle to prevent oscillation."""

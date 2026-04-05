@@ -24,6 +24,7 @@ from .const import (
     CONF_CHARGER_NUMBER_ENTITY,
     CONF_DEFAULT_MODE,
     CONF_GRID_EXPORT_SENSOR,
+    CONF_GRID_MAX_POWER,
     CONF_GUARANTEED_MIN_AMPS,
     CONF_HOUSE_CONSUMPTION_SENSOR,
     CONF_MAX_AMPS,
@@ -38,6 +39,7 @@ from .const import (
     CONF_VALLEY_END,
     CONF_VALLEY_START,
     CONF_VOLTAGE_SENSOR,
+    DEFAULT_GRID_MAX_POWER,
     DEFAULT_GUARANTEED_MIN_AMPS,
     DEFAULT_MAX_AMPS,
     DEFAULT_MAX_STEP,
@@ -172,6 +174,17 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                         )
                     ),
                     vol.Optional(
+                        CONF_GRID_MAX_POWER, default=DEFAULT_GRID_MAX_POWER
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=1000,
+                            max=50000,
+                            step=100,
+                            unit_of_measurement="W",
+                            mode=NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
                         CONF_DEFAULT_MODE,
                         default=ChargeMode.SOLAR_ONLY,
                     ): SelectSelector(
@@ -302,6 +315,20 @@ class EVChargeOptimizerOptionsFlow(OptionsFlow):
                             max=48,
                             step=1,
                             unit_of_measurement="A",
+                            mode=NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_GRID_MAX_POWER,
+                        default=current.get(
+                            CONF_GRID_MAX_POWER, DEFAULT_GRID_MAX_POWER
+                        ),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=1000,
+                            max=50000,
+                            step=100,
+                            unit_of_measurement="W",
                             mode=NumberSelectorMode.BOX,
                         )
                     ),
