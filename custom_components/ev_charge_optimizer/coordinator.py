@@ -122,7 +122,13 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return now >= start or now <= end
 
     def _get_grid_available_amps(self) -> float:
-        """Calculate max amps available from grid without overloading."""
+        """Calculate max amps available from grid without overloading.
+
+        House consumption includes charger draw, so we subtract the
+        current charger target to get the non-charger household load.
+        Otherwise the formula creates a feedback loop that keeps
+        reducing the target.
+        """
         voltage = self._get_voltage()
         if voltage <= 0:
             return 0
@@ -132,7 +138,9 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         house_consumption = self._get_sensor_value(
             self._entry.data.get(CONF_HOUSE_CONSUMPTION_SENSOR)
         ) or 0
-        available_watts = grid_max_power - house_consumption
+        charger_power = self._last_target * voltage
+        household_only = house_consumption - charger_power
+        available_watts = grid_max_power - household_only
         return max(0, available_watts / voltage)
 
     def _calculate_solar_only(self, available_power: float) -> float:
