@@ -18,6 +18,12 @@ A Home Assistant integration that optimizes EV charger power based on available 
 - Step-limited amp changes per cycle for smooth ramping
 - Automatic watts-to-amps conversion using a voltage sensor or static value
 
+## Important: Tesla API Usage
+
+> **Warning:** If you control your Tesla charger via the Tesla Fleet API (cloud), this integration will consume API calls each time it adjusts the charging amps. With a 30-second update interval, this can add up quickly and may hit rate limits.
+>
+> **Recommended:** Use an ESP32 with Bluetooth to control your Tesla locally, avoiding cloud API calls entirely. The [esphome-tesla-ble](https://github.com/yoziru/esphome-tesla-ble) project provides an ESPHome component that communicates directly with your Tesla over BLE. This gives you a local `number` entity to control charging amps with zero API usage.
+
 ## Installation
 
 ### HACS (Recommended)
