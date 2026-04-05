@@ -59,6 +59,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             maxlen=int(self._opt(CONF_ROLLING_WINDOW, DEFAULT_ROLLING_WINDOW))
         )
         self._last_target: float = 0
+        self._last_sent_amps: int = -1
         self.enabled: bool = True
         self.mode: ChargeMode = ChargeMode(
             entry.data.get("default_mode", ChargeMode.SOLAR_ONLY)
@@ -170,12 +171,16 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return target
 
     async def _async_set_charger_amps(self, amps: float) -> None:
-        """Write target amps to the charger number entity."""
+        """Write target amps to the charger number entity, only if changed."""
         entity_id = self._entry.data.get(CONF_CHARGER_NUMBER_ENTITY)
         if not entity_id:
             return
 
         rounded = round(amps)
+        if rounded == self._last_sent_amps:
+            return
+
+        self._last_sent_amps = rounded
         domain = entity_id.split(".")[0]
 
         await self.hass.services.async_call(
@@ -240,7 +245,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_set_charger_amps(target)
 
         return {
-            "target_amps": target,
+            "target_amps": round(target),
             "available_power": round(available_power, 1),
             "mode": self.mode,
             "enabled": True,
