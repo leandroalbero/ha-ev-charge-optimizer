@@ -22,6 +22,7 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_CHARGER_NUMBER_ENTITY,
+    CONF_CHARGER_SWITCH_ENTITY,
     CONF_DEFAULT_MODE,
     CONF_GRID_EXPORT_SENSOR,
     CONF_GRID_MAX_POWER,
@@ -107,6 +108,9 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                 {
                     vol.Required(CONF_CHARGER_NUMBER_ENTITY): EntitySelector(
                         EntitySelectorConfig(domain="number")
+                    ),
+                    vol.Optional(CONF_CHARGER_SWITCH_ENTITY): EntitySelector(
+                        EntitySelectorConfig(domain="switch")
                     ),
                 }
             ),

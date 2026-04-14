@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
     CONF_CHARGER_NUMBER_ENTITY,
+    CONF_CHARGER_SWITCH_ENTITY,
     CONF_GRID_EXPORT_SENSOR,
     CONF_GRID_MAX_POWER,
     CONF_GUARANTEED_MIN_AMPS,
@@ -60,6 +61,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._last_target: float = 0
         self._last_sent_amps: int = -1
+        self._charger_switch_on: bool | None = None
         self.enabled: bool = True
         self.mode: ChargeMode = ChargeMode(
             entry.data.get("default_mode", ChargeMode.SOLAR_ONLY)
@@ -178,13 +180,42 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return self._last_target + (max_step if diff > 0 else -max_step)
         return target
 
+    async def _async_set_charger_switch(self, on: bool) -> None:
+        """Turn charger power switch on/off, only if state changed."""
+        entity_id = self._entry.data.get(CONF_CHARGER_SWITCH_ENTITY)
+        if not entity_id:
+            return
+        if on == self._charger_switch_on:
+            return
+
+        self._charger_switch_on = on
+        await self.hass.services.async_call(
+            "switch",
+            "turn_on" if on else "turn_off",
+            {"entity_id": entity_id},
+        )
+
     async def _async_set_charger_amps(self, amps: float) -> None:
-        """Write target amps to the charger number entity, only if changed."""
+        """Write target amps to the charger number entity, only if changed.
+
+        When a charger switch is configured:
+        - amps == 0 → turn switch OFF (avoids idle inverter draw)
+        - amps > 0  → turn switch ON, then set amps
+        """
         entity_id = self._entry.data.get(CONF_CHARGER_NUMBER_ENTITY)
         if not entity_id:
             return
 
         rounded = round(amps)
+
+        if rounded == 0:
+            await self._async_set_charger_switch(False)
+            self._last_sent_amps = rounded
+            return
+
+        # Ensure switch is on before sending amps
+        await self._async_set_charger_switch(True)
+
         if rounded == self._last_sent_amps:
             return
 
@@ -200,8 +231,10 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Run the regulation loop."""
         if not self.enabled:
+            self._last_target = 0
+            await self._async_set_charger_amps(0)
             return {
-                "target_amps": self._last_target,
+                "target_amps": 0,
                 "available_power": 0,
                 "mode": self.mode,
                 "enabled": False,
