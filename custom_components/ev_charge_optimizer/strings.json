@@ -26,6 +26,23 @@
           "static_voltage": "Static Voltage (V)"
         }
       },
+      "reconfigure": {
+        "title": "Reconfigure EV Charge Optimizer",
+        "description": "Update your sensor, charger, and basic settings.",
+        "data": {
+          "grid_export_sensor": "Grid Export Power Sensor",
+          "solar_production_sensor": "Solar Production Sensor",
+          "house_consumption_sensor": "House Consumption Sensor",
+          "charger_number_entity": "Charger Amps Entity",
+          "charger_switch_entity": "Charger Power Switch (optional)",
+          "voltage_sensor": "Voltage Sensor (optional)",
+          "static_voltage": "Static Voltage (V)",
+          "min_amps": "Minimum Amps",
+          "max_amps": "Maximum Amps",
+          "grid_max_power": "Grid Max Power (W)",
+          "default_mode": "Default Charging Mode"
+        }
+      },
       "basics": {
         "title": "Basic Settings",
         "description": "Configure amperage limits and default charging mode.",

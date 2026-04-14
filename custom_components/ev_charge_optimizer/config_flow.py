@@ -205,6 +205,119 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict:
+        """Allow reconfiguration of entities and basic settings."""
+        reconfigure_entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            min_a = user_input.get(CONF_MIN_AMPS, DEFAULT_MIN_AMPS)
+            max_a = user_input.get(CONF_MAX_AMPS, DEFAULT_MAX_AMPS)
+            if min_a >= max_a:
+                errors["base"] = "min_amps_exceeds_max"
+            else:
+                return self.async_update_reload_and_abort(
+                    reconfigure_entry,
+                    data_updates=user_input,
+                )
+
+        current = reconfigure_entry.data
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_GRID_EXPORT_SENSOR,
+                        default=current.get(CONF_GRID_EXPORT_SENSOR),
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    vol.Required(
+                        CONF_SOLAR_PRODUCTION_SENSOR,
+                        default=current.get(CONF_SOLAR_PRODUCTION_SENSOR),
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    vol.Required(
+                        CONF_HOUSE_CONSUMPTION_SENSOR,
+                        default=current.get(CONF_HOUSE_CONSUMPTION_SENSOR),
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    vol.Required(
+                        CONF_CHARGER_NUMBER_ENTITY,
+                        default=current.get(CONF_CHARGER_NUMBER_ENTITY),
+                    ): EntitySelector(EntitySelectorConfig(domain="number")),
+                    vol.Optional(
+                        CONF_CHARGER_SWITCH_ENTITY,
+                        description={
+                            "suggested_value": current.get(
+                                CONF_CHARGER_SWITCH_ENTITY
+                            )
+                        },
+                    ): EntitySelector(EntitySelectorConfig(domain="switch")),
+                    vol.Optional(
+                        CONF_VOLTAGE_SENSOR,
+                        description={
+                            "suggested_value": current.get(CONF_VOLTAGE_SENSOR)
+                        },
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    vol.Optional(
+                        CONF_STATIC_VOLTAGE,
+                        default=current.get(
+                            CONF_STATIC_VOLTAGE, DEFAULT_STATIC_VOLTAGE
+                        ),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=100, max=400, step=1, mode=NumberSelectorMode.BOX
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_MIN_AMPS,
+                        default=current.get(CONF_MIN_AMPS, DEFAULT_MIN_AMPS),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=1, max=48, step=1, mode=NumberSelectorMode.BOX
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_MAX_AMPS,
+                        default=current.get(CONF_MAX_AMPS, DEFAULT_MAX_AMPS),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=1, max=48, step=1, mode=NumberSelectorMode.BOX
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_GRID_MAX_POWER,
+                        default=current.get(
+                            CONF_GRID_MAX_POWER, DEFAULT_GRID_MAX_POWER
+                        ),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=1000,
+                            max=50000,
+                            step=100,
+                            unit_of_measurement="W",
+                            mode=NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_DEFAULT_MODE,
+                        default=current.get(
+                            CONF_DEFAULT_MODE, ChargeMode.SOLAR_ONLY
+                        ),
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                {"value": mode.value, "label": label}
+                                for mode, label in MODE_LABELS.items()
+                            ],
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
+                }
+            ),
+            errors=errors,
+        )
+
     @staticmethod
     @callback
     def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
