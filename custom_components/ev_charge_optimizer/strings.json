@@ -64,6 +64,7 @@
         "title": "Tuning Parameters",
         "description": "Adjust the regulation algorithm and mode-specific settings.",
         "data": {
+          "prioritize_battery": "Prioritize home battery (only charge EV from grid export surplus)",
           "update_interval": "Update Interval",
           "power_buffer": "Power Buffer (hysteresis)",
           "rolling_window": "Rolling Average Window",

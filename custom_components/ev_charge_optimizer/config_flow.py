@@ -9,6 +9,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     EntitySelector,
     EntitySelectorConfig,
     NumberSelector,
@@ -32,6 +33,7 @@ from .const import (
     CONF_MAX_STEP,
     CONF_MIN_AMPS,
     CONF_POWER_BUFFER,
+    CONF_PRIORITIZE_BATTERY,
     CONF_ROLLING_WINDOW,
     CONF_SOLAR_PRODUCTION_SENSOR,
     CONF_STATIC_VOLTAGE,
@@ -46,6 +48,7 @@ from .const import (
     DEFAULT_MAX_STEP,
     DEFAULT_MIN_AMPS,
     DEFAULT_POWER_BUFFER,
+    DEFAULT_PRIORITIZE_BATTERY,
     DEFAULT_ROLLING_WINDOW,
     DEFAULT_STATIC_VOLTAGE,
     DEFAULT_UPDATE_INTERVAL,
@@ -345,6 +348,12 @@ class EVChargeOptimizerOptionsFlow(OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(
                 {
+                    vol.Optional(
+                        CONF_PRIORITIZE_BATTERY,
+                        default=current.get(
+                            CONF_PRIORITIZE_BATTERY, DEFAULT_PRIORITIZE_BATTERY
+                        ),
+                    ): BooleanSelector(),
                     vol.Optional(
                         CONF_UPDATE_INTERVAL,
                         default=current.get(

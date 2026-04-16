@@ -22,7 +22,9 @@ from .const import (
     CONF_MAX_STEP,
     CONF_MIN_AMPS,
     CONF_POWER_BUFFER,
+    CONF_PRIORITIZE_BATTERY,
     CONF_ROLLING_WINDOW,
+    CONF_SOLAR_PRODUCTION_SENSOR,
     CONF_STATIC_VOLTAGE,
     CONF_UPDATE_INTERVAL,
     CONF_VALLEY_AMPS,
@@ -35,6 +37,7 @@ from .const import (
     DEFAULT_MAX_STEP,
     DEFAULT_MIN_AMPS,
     DEFAULT_POWER_BUFFER,
+    DEFAULT_PRIORITIZE_BATTERY,
     DEFAULT_ROLLING_WINDOW,
     DEFAULT_STATIC_VOLTAGE,
     DEFAULT_UPDATE_INTERVAL,
@@ -240,24 +243,54 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "enabled": False,
             }
 
-        grid_export = self._get_sensor_value(
-            self._entry.data.get(CONF_GRID_EXPORT_SENSOR)
+        voltage = self._get_voltage()
+        power_buffer = float(self._opt(CONF_POWER_BUFFER, DEFAULT_POWER_BUFFER))
+        charger_power = self._last_target * voltage
+        prioritize_battery = bool(
+            self._opt(CONF_PRIORITIZE_BATTERY, DEFAULT_PRIORITIZE_BATTERY)
         )
 
-        if grid_export is None:
-            _LOGGER.debug("Grid export sensor unavailable, skipping cycle")
-            return {
-                "target_amps": self._last_target,
-                "available_power": 0,
-                "mode": self.mode,
-                "enabled": True,
-            }
+        if prioritize_battery:
+            # Battery-first: only use power that would otherwise go to grid
+            # (after battery and house have taken their share).
+            # Add back charger draw so the rolling average reflects the
+            # true surplus, not the reduced export caused by our own load.
+            grid_export = self._get_sensor_value(
+                self._entry.data.get(CONF_GRID_EXPORT_SENSOR)
+            )
+            if grid_export is None:
+                _LOGGER.debug("Grid export sensor unavailable, skipping cycle")
+                return {
+                    "target_amps": self._last_target,
+                    "available_power": 0,
+                    "mode": self.mode,
+                    "enabled": True,
+                }
+            self._readings.append(grid_export + charger_power)
+        else:
+            # EV-first: use all solar surplus (solar minus house).
+            # Subtract charger draw from house consumption to avoid
+            # the feedback loop (house sensor includes charger load).
+            solar_production = self._get_sensor_value(
+                self._entry.data.get(CONF_SOLAR_PRODUCTION_SENSOR)
+            )
+            if solar_production is None:
+                _LOGGER.debug(
+                    "Solar production sensor unavailable, skipping cycle"
+                )
+                return {
+                    "target_amps": self._last_target,
+                    "available_power": 0,
+                    "mode": self.mode,
+                    "enabled": True,
+                }
+            house_consumption = self._get_sensor_value(
+                self._entry.data.get(CONF_HOUSE_CONSUMPTION_SENSOR)
+            ) or 0
+            household_only = max(0, house_consumption - charger_power)
+            self._readings.append(solar_production - household_only)
 
-        self._readings.append(grid_export)
-
-        power_buffer = float(self._opt(CONF_POWER_BUFFER, DEFAULT_POWER_BUFFER))
         solar_surplus = self._rolling_average() - power_buffer
-        voltage = self._get_voltage()
         grid_capacity = self._get_grid_available_amps() * voltage
 
         # Mode dispatch
@@ -283,9 +316,12 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Clamp to min/max
         target = max(0, min(target, self.max_amps))
 
-        # Apply step limiting only for solar-based modes (prevents oscillation)
+        # Apply step limiting only for solar-based modes (prevents oscillation).
+        # Skip when starting from zero so the step limit doesn't keep the
+        # target below min_amps indefinitely (deadlock).
         if self.mode in (ChargeMode.SOLAR_ONLY, ChargeMode.MIN_SOLAR_TOPUP):
-            target = self._apply_step_limit(target)
+            if self._last_target > 0:
+                target = self._apply_step_limit(target)
 
         # Below minimum → stop charging
         if target < self.min_amps:
