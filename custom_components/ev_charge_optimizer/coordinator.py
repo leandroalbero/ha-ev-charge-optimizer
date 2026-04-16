@@ -281,8 +281,10 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if prioritize_battery:
             # Battery-first: only use power that would otherwise go to grid
             # (after battery and house have taken their share).
-            # Add back charger draw so the rolling average reflects the
-            # true surplus, not the reduced export caused by our own load.
+            # Use raw grid export with NO charger correction — the inverter
+            # manages the battery, and whatever it decides to export is the
+            # real surplus available to the EV.  Adding charger power back
+            # overshoots when the export sensor floors at zero during import.
             grid_export = self._get_sensor_value(
                 self._entry.data.get(CONF_GRID_EXPORT_SENSOR)
             )
@@ -294,7 +296,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "mode": self.mode,
                     "enabled": True,
                 }
-            self._readings.append(grid_export + charger_power)
+            self._readings.append(grid_export)
         else:
             # EV-first: use all solar surplus (solar minus house).
             # Subtract charger draw from house consumption to avoid
@@ -345,10 +347,11 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         target = max(0, min(target, self.max_amps))
 
         # Apply step limiting only for solar-based modes (prevents oscillation).
-        # Skip when starting from zero so the step limit doesn't keep the
-        # target below min_amps indefinitely (deadlock).
+        # Skip when starting from zero (avoids min_amps deadlock) and when
+        # stopping (allows immediate stop instead of 5-min ramp-down while
+        # importing from the grid).
         if self.mode in (ChargeMode.SOLAR_ONLY, ChargeMode.MIN_SOLAR_TOPUP):
-            if self._last_target > 0:
+            if self._last_target > 0 and target > 0:
                 target = self._apply_step_limit(target)
 
         # Below minimum → stop charging
