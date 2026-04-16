@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .const import (
     CONF_CHARGER_NUMBER_ENTITY,
     CONF_CHARGER_SWITCH_ENTITY,
+    CONF_CHARGER_WAKE_ENTITY,
     CONF_GRID_EXPORT_SENSOR,
     CONF_GRID_MAX_POWER,
     CONF_GUARANTEED_MIN_AMPS,
@@ -218,6 +219,26 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except (ValueError, TypeError):
             return 0
 
+    async def _async_wake_charger(self) -> None:
+        """Press the wake button when charger entities are unavailable."""
+        entity_id = self._entry.data.get(CONF_CHARGER_WAKE_ENTITY)
+        if not entity_id:
+            return
+        _LOGGER.debug("Charger entity unavailable, pressing wake button")
+        await self.hass.services.async_call(
+            "button",
+            "press",
+            {"entity_id": entity_id},
+        )
+
+    def _is_charger_available(self) -> bool:
+        """Check if charger number entity is reachable."""
+        entity_id = self._entry.data.get(CONF_CHARGER_NUMBER_ENTITY)
+        if not entity_id:
+            return False
+        state = self.hass.states.get(entity_id)
+        return state is not None and state.state not in ("unknown", "unavailable")
+
     async def _async_set_charger_amps(self, amps: float) -> None:
         """Write target amps to the charger number entity.
 
@@ -236,6 +257,11 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if rounded == 0:
             await self._async_set_charger_switch(False)
+            return
+
+        # Wake the car if charger entity is unavailable (asleep)
+        if not self._is_charger_available():
+            await self._async_wake_charger()
             return
 
         # Ensure switch is on before sending amps

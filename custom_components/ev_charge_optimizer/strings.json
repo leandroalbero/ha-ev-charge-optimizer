@@ -12,10 +12,11 @@
       },
       "charger": {
         "title": "Charger Control",
-        "description": "Select the number entity that controls your charger's amperage. Optionally select a switch entity to cut power completely when charging stops (prevents idle inverter draw).",
+        "description": "Select the number entity that controls your charger's amperage. Optionally select a switch to cut power when idle and a wake button to wake the car when solar surplus is available.",
         "data": {
           "charger_number_entity": "Charger Amps Entity",
-          "charger_switch_entity": "Charger Power Switch (optional)"
+          "charger_switch_entity": "Charger Power Switch (optional)",
+          "charger_wake_entity": "Car Wake Button (optional)"
         }
       },
       "voltage": {
@@ -35,6 +36,7 @@
           "house_consumption_sensor": "House Consumption Sensor",
           "charger_number_entity": "Charger Amps Entity",
           "charger_switch_entity": "Charger Power Switch (optional)",
+          "charger_wake_entity": "Car Wake Button (optional)",
           "voltage_sensor": "Voltage Sensor (optional)",
           "static_voltage": "Static Voltage (V)",
           "min_amps": "Minimum Amps",

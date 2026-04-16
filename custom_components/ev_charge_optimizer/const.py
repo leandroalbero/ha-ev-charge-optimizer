@@ -13,6 +13,7 @@ CONF_VOLTAGE_SENSOR = "voltage_sensor"
 # Config keys - charger
 CONF_CHARGER_NUMBER_ENTITY = "charger_number_entity"
 CONF_CHARGER_SWITCH_ENTITY = "charger_switch_entity"
+CONF_CHARGER_WAKE_ENTITY = "charger_wake_entity"
 
 # Config keys - settings
 CONF_STATIC_VOLTAGE = "static_voltage"

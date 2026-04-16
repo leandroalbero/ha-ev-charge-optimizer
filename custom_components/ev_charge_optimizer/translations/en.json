@@ -12,9 +12,11 @@
       },
       "charger": {
         "title": "Charger Control",
-        "description": "Select the number entity that controls your charger's amperage.",
+        "description": "Select the number entity that controls your charger's amperage. Optionally select a switch to cut power when idle and a wake button to wake the car when solar surplus is available.",
         "data": {
-          "charger_number_entity": "Charger Amps Entity"
+          "charger_number_entity": "Charger Amps Entity",
+          "charger_switch_entity": "Charger Power Switch (optional)",
+          "charger_wake_entity": "Car Wake Button (optional)"
         }
       },
       "voltage": {

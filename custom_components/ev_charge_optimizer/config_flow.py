@@ -24,6 +24,7 @@ from homeassistant.helpers.selector import (
 from .const import (
     CONF_CHARGER_NUMBER_ENTITY,
     CONF_CHARGER_SWITCH_ENTITY,
+    CONF_CHARGER_WAKE_ENTITY,
     CONF_DEFAULT_MODE,
     CONF_GRID_EXPORT_SENSOR,
     CONF_GRID_MAX_POWER,
@@ -114,6 +115,9 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                     ),
                     vol.Optional(CONF_CHARGER_SWITCH_ENTITY): EntitySelector(
                         EntitySelectorConfig(domain="switch")
+                    ),
+                    vol.Optional(CONF_CHARGER_WAKE_ENTITY): EntitySelector(
+                        EntitySelectorConfig(domain="button")
                     ),
                 }
             ),
@@ -256,6 +260,14 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                             )
                         },
                     ): EntitySelector(EntitySelectorConfig(domain="switch")),
+                    vol.Optional(
+                        CONF_CHARGER_WAKE_ENTITY,
+                        description={
+                            "suggested_value": current.get(
+                                CONF_CHARGER_WAKE_ENTITY
+                            )
+                        },
+                    ): EntitySelector(EntitySelectorConfig(domain="button")),
                     vol.Optional(
                         CONF_VOLTAGE_SENSOR,
                         description={
