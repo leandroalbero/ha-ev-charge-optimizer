@@ -307,10 +307,16 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if prioritize_battery:
             # Battery-first: only use power that would otherwise go to grid
             # (after battery and house have taken their share).
-            # Use raw grid export with NO charger correction — the inverter
-            # manages the battery, and whatever it decides to export is the
-            # real surplus available to the EV.  Adding charger power back
-            # overshoots when the export sensor floors at zero during import.
+            #
+            # When export > 0 we are definitely not over-budget, so add
+            # back the charger's own draw to get the true available surplus.
+            # Without this correction the target never converges — each amp
+            # increase lowers the export reading, capping the charger well
+            # below the real surplus.
+            #
+            # When export == 0 the sensor has floored (we may be importing).
+            # The correction would overshoot here, so feed in the raw 0 to
+            # pull the rolling average down and trigger a ramp-down.
             grid_export = self._get_sensor_value(
                 self._entry.data.get(CONF_GRID_EXPORT_SENSOR)
             )
@@ -322,7 +328,10 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "mode": self.mode,
                     "enabled": True,
                 }
-            self._readings.append(grid_export)
+            if grid_export > 0:
+                self._readings.append(grid_export + charger_power)
+            else:
+                self._readings.append(0)
         else:
             # EV-first: use all solar surplus (solar minus house).
             # Subtract charger draw from house consumption to avoid
