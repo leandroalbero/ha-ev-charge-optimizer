@@ -63,8 +63,6 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             maxlen=int(self._opt(CONF_ROLLING_WINDOW, DEFAULT_ROLLING_WINDOW))
         )
         self._last_target: float = 0
-        self._last_sent_amps: int = -1
-        self._charger_switch_on: bool | None = None
         self.enabled: bool = True
         self.mode: ChargeMode = ChargeMode(
             entry.data.get("default_mode", ChargeMode.SOLAR_ONLY)
@@ -130,9 +128,9 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Calculate max amps available from grid without overloading.
 
         House consumption includes charger draw, so we subtract the
-        current charger target to get the non-charger household load.
-        Otherwise the formula creates a feedback loop that keeps
-        reducing the target.
+        actual charger draw to get the non-charger household load.
+        Uses the real entity value instead of _last_target so the
+        correction is zero when the charger isn't actually drawing.
         """
         voltage = self._get_voltage()
         if voltage <= 0:
@@ -143,8 +141,8 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         house_consumption = self._get_sensor_value(
             self._entry.data.get(CONF_HOUSE_CONSUMPTION_SENSOR)
         ) or 0
-        charger_power = self._last_target * voltage
-        household_only = house_consumption - charger_power
+        charger_power = self._get_actual_charger_amps() * voltage
+        household_only = max(0, house_consumption - charger_power)
         available_watts = grid_max_power - household_only
         return max(0, available_watts / voltage)
 
@@ -183,23 +181,48 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return self._last_target + (max_step if diff > 0 else -max_step)
         return target
 
+    def _is_charger_switch_on(self) -> bool | None:
+        """Read the actual charger switch state from HA."""
+        entity_id = self._entry.data.get(CONF_CHARGER_SWITCH_ENTITY)
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            return None
+        return state.state == "on"
+
     async def _async_set_charger_switch(self, on: bool) -> None:
-        """Turn charger power switch on/off, only if state changed."""
+        """Turn charger power switch on/off, checking actual entity state."""
         entity_id = self._entry.data.get(CONF_CHARGER_SWITCH_ENTITY)
         if not entity_id:
             return
-        if on == self._charger_switch_on:
+        if on == self._is_charger_switch_on():
             return
 
-        self._charger_switch_on = on
         await self.hass.services.async_call(
             "switch",
             "turn_on" if on else "turn_off",
             {"entity_id": entity_id},
         )
 
+    def _get_actual_charger_amps(self) -> int:
+        """Read the actual charger amps from the number entity."""
+        entity_id = self._entry.data.get(CONF_CHARGER_NUMBER_ENTITY)
+        if not entity_id:
+            return 0
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return 0
+        try:
+            return round(float(state.state))
+        except (ValueError, TypeError):
+            return 0
+
     async def _async_set_charger_amps(self, amps: float) -> None:
-        """Write target amps to the charger number entity, only if changed.
+        """Write target amps to the charger number entity.
+
+        Reads actual entity state each cycle so commands are re-sent
+        when a previous call was lost (BLE hiccup, car was asleep, …).
 
         When a charger switch is configured:
         - amps == 0 → turn switch OFF (avoids idle inverter draw)
@@ -213,16 +236,14 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         if rounded == 0:
             await self._async_set_charger_switch(False)
-            self._last_sent_amps = rounded
             return
 
         # Ensure switch is on before sending amps
         await self._async_set_charger_switch(True)
 
-        if rounded == self._last_sent_amps:
+        if rounded == self._get_actual_charger_amps():
             return
 
-        self._last_sent_amps = rounded
         domain = entity_id.split(".")[0]
 
         await self.hass.services.async_call(
@@ -245,7 +266,14 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         voltage = self._get_voltage()
         power_buffer = float(self._opt(CONF_POWER_BUFFER, DEFAULT_POWER_BUFFER))
-        charger_power = self._last_target * voltage
+
+        # Use actual charger draw (from entity state), not the theoretical
+        # target.  If the charger didn't accept the command (BLE glitch,
+        # car asleep, unplugged …) the real draw is 0 and we must not
+        # pretend otherwise — that inflates the surplus with phantom watts.
+        actual_charger_amps = self._get_actual_charger_amps()
+        charger_power = actual_charger_amps * voltage
+
         prioritize_battery = bool(
             self._opt(CONF_PRIORITIZE_BATTERY, DEFAULT_PRIORITIZE_BATTERY)
         )
