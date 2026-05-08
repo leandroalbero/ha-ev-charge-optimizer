@@ -22,6 +22,9 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
+    CONF_BATTERY_MIN_SOC,
+    CONF_BATTERY_POWER_SENSOR,
+    CONF_BATTERY_SOC_SENSOR,
     CONF_CHARGER_NUMBER_ENTITY,
     CONF_CHARGER_SWITCH_ENTITY,
     CONF_CHARGER_WAKE_ENTITY,
@@ -43,6 +46,7 @@ from .const import (
     CONF_VALLEY_END,
     CONF_VALLEY_START,
     CONF_VOLTAGE_SENSOR,
+    DEFAULT_BATTERY_MIN_SOC,
     DEFAULT_GRID_MAX_POWER,
     DEFAULT_GUARANTEED_MIN_AMPS,
     DEFAULT_MAX_AMPS,
@@ -92,6 +96,12 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                         EntitySelectorConfig(domain="sensor")
                     ),
                     vol.Required(CONF_HOUSE_CONSUMPTION_SENSOR): EntitySelector(
+                        EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(CONF_BATTERY_SOC_SENSOR): EntitySelector(
+                        EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(CONF_BATTERY_POWER_SENSOR): EntitySelector(
                         EntitySelectorConfig(domain="sensor")
                     ),
                 }
@@ -248,6 +258,20 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_HOUSE_CONSUMPTION_SENSOR,
                         default=current.get(CONF_HOUSE_CONSUMPTION_SENSOR),
                     ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    vol.Optional(
+                        CONF_BATTERY_SOC_SENSOR,
+                        description={
+                            "suggested_value": current.get(CONF_BATTERY_SOC_SENSOR)
+                        },
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    vol.Optional(
+                        CONF_BATTERY_POWER_SENSOR,
+                        description={
+                            "suggested_value": current.get(
+                                CONF_BATTERY_POWER_SENSOR
+                            )
+                        },
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
                     vol.Required(
                         CONF_CHARGER_NUMBER_ENTITY,
                         default=current.get(CONF_CHARGER_NUMBER_ENTITY),
@@ -366,6 +390,20 @@ class EVChargeOptimizerOptionsFlow(OptionsFlow):
                             CONF_PRIORITIZE_BATTERY, DEFAULT_PRIORITIZE_BATTERY
                         ),
                     ): BooleanSelector(),
+                    vol.Optional(
+                        CONF_BATTERY_MIN_SOC,
+                        default=current.get(
+                            CONF_BATTERY_MIN_SOC, DEFAULT_BATTERY_MIN_SOC
+                        ),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=0,
+                            max=100,
+                            step=1,
+                            unit_of_measurement="%",
+                            mode=NumberSelectorMode.SLIDER,
+                        )
+                    ),
                     vol.Optional(
                         CONF_UPDATE_INTERVAL,
                         default=current.get(

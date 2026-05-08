@@ -9,6 +9,8 @@ CONF_GRID_EXPORT_SENSOR = "grid_export_sensor"
 CONF_SOLAR_PRODUCTION_SENSOR = "solar_production_sensor"
 CONF_HOUSE_CONSUMPTION_SENSOR = "house_consumption_sensor"
 CONF_VOLTAGE_SENSOR = "voltage_sensor"
+CONF_BATTERY_SOC_SENSOR = "battery_soc_sensor"
+CONF_BATTERY_POWER_SENSOR = "battery_power_sensor"
 
 # Config keys - charger
 CONF_CHARGER_NUMBER_ENTITY = "charger_number_entity"
@@ -30,6 +32,7 @@ CONF_VALLEY_AMPS = "valley_amps"
 CONF_GUARANTEED_MIN_AMPS = "guaranteed_min_amps"
 CONF_GRID_MAX_POWER = "grid_max_power"
 CONF_PRIORITIZE_BATTERY = "prioritize_battery"
+CONF_BATTERY_MIN_SOC = "battery_min_soc"
 
 # Defaults
 DEFAULT_MIN_AMPS = 6
@@ -43,6 +46,7 @@ DEFAULT_MAX_STEP = 2
 DEFAULT_VALLEY_AMPS = 16
 DEFAULT_GUARANTEED_MIN_AMPS = 8
 DEFAULT_PRIORITIZE_BATTERY = False
+DEFAULT_BATTERY_MIN_SOC = 95
 DEFAULT_VALLEY_START = "23:00"
 DEFAULT_VALLEY_END = "07:00"
 

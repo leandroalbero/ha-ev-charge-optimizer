@@ -12,6 +12,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
+    CONF_BATTERY_MIN_SOC,
+    CONF_BATTERY_POWER_SENSOR,
+    CONF_BATTERY_SOC_SENSOR,
     CONF_CHARGER_NUMBER_ENTITY,
     CONF_CHARGER_SWITCH_ENTITY,
     CONF_CHARGER_WAKE_ENTITY,
@@ -32,6 +35,7 @@ from .const import (
     CONF_VALLEY_END,
     CONF_VALLEY_START,
     CONF_VOLTAGE_SENSOR,
+    DEFAULT_BATTERY_MIN_SOC,
     DEFAULT_GRID_MAX_POWER,
     DEFAULT_GUARANTEED_MIN_AMPS,
     DEFAULT_MAX_AMPS,
@@ -111,6 +115,40 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self._readings:
             return 0.0
         return sum(self._readings) / len(self._readings)
+
+    def _get_battery_soc(self) -> float | None:
+        """Read battery state-of-charge percentage if sensor configured."""
+        return self._get_sensor_value(
+            self._entry.data.get(CONF_BATTERY_SOC_SENSOR)
+        )
+
+    def _get_battery_charge_demand(self) -> float:
+        """Battery power being absorbed (W); 0 if discharging or unconfigured.
+
+        Sign convention: positive = charging (sink), negative = discharging
+        (source). Only the charging draw competes with the EV for solar, so
+        we clamp to zero when the battery is exporting to the house.
+        """
+        val = self._get_sensor_value(
+            self._entry.data.get(CONF_BATTERY_POWER_SENSOR)
+        )
+        if val is None:
+            return 0
+        return max(0, val)
+
+    def _battery_blocks_solar_charge(self) -> bool:
+        """True when SOC sensor configured and SOC below the min threshold.
+
+        Used to gate Solar-Only and Min-Topup modes so the EV does not
+        steal solar that should top up the home battery first.
+        """
+        soc = self._get_battery_soc()
+        if soc is None:
+            return False
+        threshold = float(
+            self._opt(CONF_BATTERY_MIN_SOC, DEFAULT_BATTERY_MIN_SOC)
+        )
+        return soc < threshold
 
     def _is_valley_time(self) -> bool:
         """Check if current time is within valley/off-peak window."""
@@ -353,15 +391,32 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._entry.data.get(CONF_HOUSE_CONSUMPTION_SENSOR)
             ) or 0
             household_only = max(0, house_consumption - charger_power)
-            self._readings.append(solar_production - household_only)
+            # Reserve whatever the home battery is currently absorbing —
+            # otherwise the EV would steal solar that the inverter is
+            # routing to the battery (e.g. while the MPC controller is
+            # charging it).
+            battery_demand = self._get_battery_charge_demand()
+            self._readings.append(
+                solar_production - household_only - battery_demand
+            )
 
         solar_surplus = self._rolling_average() - power_buffer
         grid_capacity = self._get_grid_available_amps() * voltage
 
+        # Battery-priority gate: in pure solar modes, hold off charging
+        # until the home battery has reached its minimum SOC. Grid-backed
+        # modes (Max Solar+Grid, Valley) are unaffected because the user
+        # explicitly opted into pulling from the grid.
+        battery_blocks = self._battery_blocks_solar_charge()
+
         # Mode dispatch
         if self.mode == ChargeMode.SOLAR_ONLY:
-            target = self._calculate_solar_only(solar_surplus)
-            available_power = solar_surplus
+            if battery_blocks:
+                target = 0
+                available_power = 0
+            else:
+                target = self._calculate_solar_only(solar_surplus)
+                available_power = solar_surplus
         elif self.mode == ChargeMode.MAX_SOLAR_GRID:
             target = self._calculate_max_grid()
             available_power = grid_capacity
@@ -369,11 +424,15 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             target = self._calculate_valley(solar_surplus)
             available_power = grid_capacity if self._is_valley_time() else solar_surplus
         elif self.mode == ChargeMode.MIN_SOLAR_TOPUP:
-            target = self._calculate_min_topup(solar_surplus)
-            guaranteed_power = float(
-                self._opt(CONF_GUARANTEED_MIN_AMPS, DEFAULT_GUARANTEED_MIN_AMPS)
-            ) * voltage
-            available_power = max(solar_surplus, guaranteed_power)
+            if battery_blocks:
+                target = 0
+                available_power = 0
+            else:
+                target = self._calculate_min_topup(solar_surplus)
+                guaranteed_power = float(
+                    self._opt(CONF_GUARANTEED_MIN_AMPS, DEFAULT_GUARANTEED_MIN_AMPS)
+                ) * voltage
+                available_power = max(solar_surplus, guaranteed_power)
         else:
             target = 0
             available_power = 0

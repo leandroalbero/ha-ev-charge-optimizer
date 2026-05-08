@@ -7,7 +7,9 @@
         "data": {
           "grid_export_sensor": "Grid Export Power Sensor",
           "solar_production_sensor": "Solar Production Sensor",
-          "house_consumption_sensor": "House Consumption Sensor"
+          "house_consumption_sensor": "House Consumption Sensor",
+          "battery_soc_sensor": "Home Battery SOC Sensor (optional)",
+          "battery_power_sensor": "Home Battery Power Sensor (optional, +charging/-discharging)"
         }
       },
       "charger": {
@@ -49,6 +51,7 @@
         "description": "Adjust the regulation algorithm and mode-specific settings.",
         "data": {
           "prioritize_battery": "Prioritize home battery (only charge EV from grid export surplus)",
+          "battery_min_soc": "Battery min SOC before EV may charge (Solar Only / Top-up modes)",
           "update_interval": "Update Interval",
           "power_buffer": "Power Buffer (hysteresis)",
           "rolling_window": "Rolling Average Window",
