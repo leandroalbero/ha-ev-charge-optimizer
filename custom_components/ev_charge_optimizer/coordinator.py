@@ -56,6 +56,16 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _parse_hhmm(value: str):
+    """Parse a time string from HA TimeSelector (HH:MM or HH:MM:SS)."""
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(value, fmt).time()
+        except ValueError:
+            continue
+    raise ValueError(f"Invalid time string: {value!r}")
+
+
 class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator that runs the regulation loop."""
 
@@ -155,8 +165,8 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         now = datetime.now().time()
         start_str = self._opt(CONF_VALLEY_START, DEFAULT_VALLEY_START)
         end_str = self._opt(CONF_VALLEY_END, DEFAULT_VALLEY_END)
-        start = datetime.strptime(start_str, "%H:%M").time()
-        end = datetime.strptime(end_str, "%H:%M").time()
+        start = _parse_hhmm(start_str)
+        end = _parse_hhmm(end_str)
 
         if start <= end:
             return start <= now <= end
