@@ -200,10 +200,11 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _get_grid_available_amps(self) -> float:
         """Calculate max amps available from grid without overloading.
 
-        House consumption includes charger draw, so we subtract the
-        actual charger draw to get the non-charger household load.
-        Uses the real entity value instead of _last_target so the
-        correction is zero when the charger isn't actually drawing.
+        Uses the actual grid import (from grid_export_sensor) to size the
+        EV target, so the home battery's discharge is correctly credited
+        against household load instead of being assumed to come from the
+        grid. Falls back to house-consumption math if the grid sensor is
+        unavailable.
         """
         voltage = self._get_voltage()
         if voltage <= 0:
@@ -211,12 +212,26 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         grid_max_power = float(
             self._opt(CONF_GRID_MAX_POWER, DEFAULT_GRID_MAX_POWER)
         )
-        house_consumption = self._get_sensor_value(
-            self._entry.data.get(CONF_HOUSE_CONSUMPTION_SENSOR)
-        ) or 0
         charger_power = self._get_actual_charger_amps() * voltage
-        household_only = max(0, house_consumption - charger_power)
-        available_watts = grid_max_power - household_only
+
+        grid_export = self._get_sensor_value(
+            self._entry.data.get(CONF_GRID_EXPORT_SENSOR)
+        )
+        if grid_export is not None:
+            # Sign convention: positive = exporting, negative = importing.
+            current_import = max(0, -grid_export)
+            grid_headroom = max(0, grid_max_power - current_import)
+            # EV can keep its current grid share plus whatever headroom
+            # remains on the fuse — the battery/solar continue to absorb
+            # the non-EV load as before.
+            available_watts = charger_power + grid_headroom
+        else:
+            house_consumption = self._get_sensor_value(
+                self._entry.data.get(CONF_HOUSE_CONSUMPTION_SENSOR)
+            ) or 0
+            household_only = max(0, house_consumption - charger_power)
+            available_watts = grid_max_power - household_only
+
         return max(0, available_watts / voltage)
 
     def _calculate_solar_only(self, available_power: float) -> float:
