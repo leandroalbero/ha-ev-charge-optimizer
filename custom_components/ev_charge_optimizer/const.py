@@ -11,6 +11,7 @@ CONF_HOUSE_CONSUMPTION_SENSOR = "house_consumption_sensor"
 CONF_VOLTAGE_SENSOR = "voltage_sensor"
 CONF_BATTERY_SOC_SENSOR = "battery_soc_sensor"
 CONF_BATTERY_POWER_SENSOR = "battery_power_sensor"
+CONF_EV_SOC_SENSOR = "ev_soc_sensor"
 
 # Config keys - charger
 CONF_CHARGER_NUMBER_ENTITY = "charger_number_entity"
@@ -29,6 +30,7 @@ CONF_MAX_STEP = "max_step"
 CONF_VALLEY_START = "valley_start"
 CONF_VALLEY_END = "valley_end"
 CONF_VALLEY_AMPS = "valley_amps"
+CONF_VALLEY_TARGET_SOC = "valley_target_soc"
 CONF_GUARANTEED_MIN_AMPS = "guaranteed_min_amps"
 CONF_GRID_MAX_POWER = "grid_max_power"
 CONF_PRIORITIZE_BATTERY = "prioritize_battery"
@@ -44,6 +46,7 @@ DEFAULT_POWER_BUFFER = 100
 DEFAULT_ROLLING_WINDOW = 5
 DEFAULT_MAX_STEP = 2
 DEFAULT_VALLEY_AMPS = 16
+DEFAULT_VALLEY_TARGET_SOC = 100
 DEFAULT_GUARANTEED_MIN_AMPS = 8
 DEFAULT_PRIORITIZE_BATTERY = False
 DEFAULT_BATTERY_MIN_SOC = 95

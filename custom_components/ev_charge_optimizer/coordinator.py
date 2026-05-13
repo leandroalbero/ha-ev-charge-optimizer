@@ -15,6 +15,7 @@ from .const import (
     CONF_BATTERY_MIN_SOC,
     CONF_BATTERY_POWER_SENSOR,
     CONF_BATTERY_SOC_SENSOR,
+    CONF_EV_SOC_SENSOR,
     CONF_CHARGER_NUMBER_ENTITY,
     CONF_CHARGER_SWITCH_ENTITY,
     CONF_CHARGER_WAKE_ENTITY,
@@ -32,6 +33,7 @@ from .const import (
     CONF_STATIC_VOLTAGE,
     CONF_UPDATE_INTERVAL,
     CONF_VALLEY_AMPS,
+    CONF_VALLEY_TARGET_SOC,
     CONF_VALLEY_END,
     CONF_VALLEY_START,
     CONF_VOLTAGE_SENSOR,
@@ -47,6 +49,7 @@ from .const import (
     DEFAULT_STATIC_VOLTAGE,
     DEFAULT_UPDATE_INTERVAL,
     DEFAULT_VALLEY_AMPS,
+    DEFAULT_VALLEY_TARGET_SOC,
     DEFAULT_VALLEY_END,
     DEFAULT_VALLEY_START,
     DOMAIN,
@@ -146,6 +149,27 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return 0
         return max(0, val)
 
+    def _get_ev_soc(self) -> float | None:
+        """Read EV state-of-charge percentage if sensor configured."""
+        return self._get_sensor_value(
+            self._entry.data.get(CONF_EV_SOC_SENSOR)
+        )
+
+    def _ev_at_valley_target(self) -> bool:
+        """True when EV SOC sensor configured and SOC has hit the valley cap.
+
+        Returns False (no cap) if no EV SOC sensor is configured or its
+        value is unavailable, so behavior is unchanged for users who
+        haven't set one up.
+        """
+        soc = self._get_ev_soc()
+        if soc is None:
+            return False
+        target = float(
+            self._opt(CONF_VALLEY_TARGET_SOC, DEFAULT_VALLEY_TARGET_SOC)
+        )
+        return soc >= target
+
     def _battery_blocks_solar_charge(self) -> bool:
         """True when SOC sensor configured and SOC below the min threshold.
 
@@ -209,6 +233,8 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _calculate_valley(self, available_power: float) -> float:
         """Valley: charge at configured amps during off-peak, solar otherwise."""
         if self._is_valley_time():
+            if self._ev_at_valley_target():
+                return 0
             valley_amps = float(self._opt(CONF_VALLEY_AMPS, DEFAULT_VALLEY_AMPS))
             return min(valley_amps, self._get_grid_available_amps())
         return self._calculate_solar_only(available_power)

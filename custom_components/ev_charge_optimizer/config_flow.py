@@ -25,6 +25,7 @@ from .const import (
     CONF_BATTERY_MIN_SOC,
     CONF_BATTERY_POWER_SENSOR,
     CONF_BATTERY_SOC_SENSOR,
+    CONF_EV_SOC_SENSOR,
     CONF_CHARGER_NUMBER_ENTITY,
     CONF_CHARGER_SWITCH_ENTITY,
     CONF_CHARGER_WAKE_ENTITY,
@@ -45,6 +46,7 @@ from .const import (
     CONF_VALLEY_AMPS,
     CONF_VALLEY_END,
     CONF_VALLEY_START,
+    CONF_VALLEY_TARGET_SOC,
     CONF_VOLTAGE_SENSOR,
     DEFAULT_BATTERY_MIN_SOC,
     DEFAULT_GRID_MAX_POWER,
@@ -60,6 +62,7 @@ from .const import (
     DEFAULT_VALLEY_AMPS,
     DEFAULT_VALLEY_END,
     DEFAULT_VALLEY_START,
+    DEFAULT_VALLEY_TARGET_SOC,
     DOMAIN,
     ChargeMode,
     MODE_LABELS,
@@ -102,6 +105,9 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                         EntitySelectorConfig(domain="sensor")
                     ),
                     vol.Optional(CONF_BATTERY_POWER_SENSOR): EntitySelector(
+                        EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(CONF_EV_SOC_SENSOR): EntitySelector(
                         EntitySelectorConfig(domain="sensor")
                     ),
                 }
@@ -270,6 +276,12 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                             "suggested_value": current.get(
                                 CONF_BATTERY_POWER_SENSOR
                             )
+                        },
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    vol.Optional(
+                        CONF_EV_SOC_SENSOR,
+                        description={
+                            "suggested_value": current.get(CONF_EV_SOC_SENSOR)
                         },
                     ): EntitySelector(EntitySelectorConfig(domain="sensor")),
                     vol.Required(
@@ -478,6 +490,20 @@ class EVChargeOptimizerOptionsFlow(OptionsFlow):
                             step=1,
                             unit_of_measurement="A",
                             mode=NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_VALLEY_TARGET_SOC,
+                        default=current.get(
+                            CONF_VALLEY_TARGET_SOC, DEFAULT_VALLEY_TARGET_SOC
+                        ),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=0,
+                            max=100,
+                            step=1,
+                            unit_of_measurement="%",
+                            mode=NumberSelectorMode.SLIDER,
                         )
                     ),
                     vol.Optional(

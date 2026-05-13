@@ -9,7 +9,8 @@
           "solar_production_sensor": "Solar Production Sensor",
           "house_consumption_sensor": "House Consumption Sensor",
           "battery_soc_sensor": "Home Battery SOC Sensor (optional)",
-          "battery_power_sensor": "Home Battery Power Sensor (optional, +charging/-discharging)"
+          "battery_power_sensor": "Home Battery Power Sensor (optional, +charging/-discharging)",
+          "ev_soc_sensor": "EV Battery SOC Sensor (optional, used by Valley target SOC)"
         }
       },
       "charger": {
@@ -59,6 +60,7 @@
           "valley_start": "Valley Start Time",
           "valley_end": "Valley End Time",
           "valley_amps": "Valley Charging Amps",
+          "valley_target_soc": "Valley Target SOC (stop charging at this EV %)",
           "guaranteed_min_amps": "Guaranteed Min Amps (Top-up mode)",
           "grid_max_power": "Grid Max Power (W)"
         }
