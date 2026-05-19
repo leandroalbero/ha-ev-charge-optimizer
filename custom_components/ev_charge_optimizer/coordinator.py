@@ -211,12 +211,15 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return now >= start or now <= end
 
     def _get_grid_available_amps(self) -> float:
-        """EV amps available without total grid import exceeding grid_max_power.
+        """Charger amps that keep grid import at or below grid_max_power.
 
-        Reads the grid export sensor directly and subtracts the charger's
-        current draw so the headroom reflects what non-EV loads are
-        pulling right now. The optimizer then ramps the EV until total
-        grid import approaches the cap.
+        Treats grid import as the controlled variable: each cycle adds
+        the gap between live import and the cap (as amps) to the
+        charger's current setpoint. Solar and battery contribution flow
+        into the charger on top of the grid cap, so the EV can ramp up
+        to ``max_amps`` whenever they cover the difference. When grid
+        import would overshoot, the gap goes negative and the setpoint
+        drops on the next cycle.
         """
         voltage = self._get_voltage()
         if voltage <= 0:
@@ -230,9 +233,9 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if grid_export is None:
             return 0
         current_import = max(0.0, -grid_export)
-        charger_power = self._get_actual_charger_amps() * voltage
-        non_ev_import = max(0.0, current_import - charger_power)
-        return max(0.0, (grid_max_power - non_ev_import) / voltage)
+        headroom_watts = grid_max_power - current_import
+        actual_amps = self._get_actual_charger_amps()
+        return max(0.0, actual_amps + headroom_watts / voltage)
 
     def _calculate_solar_only(self, available_power: float) -> float:
         """Solar Only: charge from surplus only."""
