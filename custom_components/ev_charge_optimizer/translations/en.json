@@ -10,6 +10,7 @@
           "house_consumption_sensor": "House Consumption Sensor",
           "battery_soc_sensor": "Home Battery SOC Sensor (optional)",
           "battery_power_sensor": "Home Battery Power Sensor (optional, +charging/-discharging)",
+          "battery_mode_sensor": "Home Battery Mode Sensor (optional — skips phantom headroom credit when inverter is not discharging)",
           "ev_soc_sensor": "EV Battery SOC Sensor (optional, used by Valley target SOC)"
         }
       },

@@ -23,6 +23,7 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_BATTERY_MIN_SOC,
+    CONF_BATTERY_MODE_SENSOR,
     CONF_BATTERY_POWER_SENSOR,
     CONF_BATTERY_SOC_SENSOR,
     CONF_EV_SOC_SENSOR,
@@ -105,6 +106,9 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                         EntitySelectorConfig(domain="sensor")
                     ),
                     vol.Optional(CONF_BATTERY_POWER_SENSOR): EntitySelector(
+                        EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(CONF_BATTERY_MODE_SENSOR): EntitySelector(
                         EntitySelectorConfig(domain="sensor")
                     ),
                     vol.Optional(CONF_EV_SOC_SENSOR): EntitySelector(
@@ -275,6 +279,14 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                         description={
                             "suggested_value": current.get(
                                 CONF_BATTERY_POWER_SENSOR
+                            )
+                        },
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    vol.Optional(
+                        CONF_BATTERY_MODE_SENSOR,
+                        description={
+                            "suggested_value": current.get(
+                                CONF_BATTERY_MODE_SENSOR
                             )
                         },
                     ): EntitySelector(EntitySelectorConfig(domain="sensor")),

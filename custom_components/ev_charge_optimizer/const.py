@@ -11,6 +11,7 @@ CONF_HOUSE_CONSUMPTION_SENSOR = "house_consumption_sensor"
 CONF_VOLTAGE_SENSOR = "voltage_sensor"
 CONF_BATTERY_SOC_SENSOR = "battery_soc_sensor"
 CONF_BATTERY_POWER_SENSOR = "battery_power_sensor"
+CONF_BATTERY_MODE_SENSOR = "battery_mode_sensor"
 CONF_EV_SOC_SENSOR = "ev_soc_sensor"
 
 # Config keys - charger
@@ -35,6 +36,21 @@ CONF_GUARANTEED_MIN_AMPS = "guaranteed_min_amps"
 CONF_GRID_MAX_POWER = "grid_max_power"
 CONF_PRIORITIZE_BATTERY = "prioritize_battery"
 CONF_BATTERY_MIN_SOC = "battery_min_soc"
+
+# Battery mode states that mean the battery is NOT discharging to support
+# household load. When the inverter reports any of these, the EV optimizer
+# cannot assume that grid_export-derived headroom is real, since the
+# battery is not offsetting the load (and may even be pulling extra from
+# the grid). Anything outside this set is treated as "discharging".
+BATTERY_MODES_NOT_DISCHARGING = frozenset(
+    {
+        "Charge",
+        "Standby",
+        "No battery",
+        "To be charged",
+        "To be discharged",
+    }
+)
 
 # Defaults
 DEFAULT_MIN_AMPS = 6

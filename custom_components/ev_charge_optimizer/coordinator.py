@@ -12,7 +12,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
+    BATTERY_MODES_NOT_DISCHARGING,
     CONF_BATTERY_MIN_SOC,
+    CONF_BATTERY_MODE_SENSOR,
     CONF_BATTERY_POWER_SENSOR,
     CONF_BATTERY_SOC_SENSOR,
     CONF_EV_SOC_SENSOR,
@@ -170,6 +172,37 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         return soc >= target
 
+    def _get_sensor_state(self, entity_id: str | None) -> str | None:
+        """Read the raw state string of an entity, or None if unavailable."""
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        return state.state
+
+    def _battery_is_discharging(self) -> bool:
+        """True only when the home battery is actively sourcing power.
+
+        The grid_export reading silently includes battery discharge, so
+        the EV optimizer must not derive headroom from it unless the
+        battery is committed to keep discharging. Inverter mode is the
+        authoritative signal; signed battery power is the fallback when
+        no mode sensor is configured.
+        """
+        mode = self._get_sensor_state(
+            self._entry.data.get(CONF_BATTERY_MODE_SENSOR)
+        )
+        if mode is not None:
+            return mode not in BATTERY_MODES_NOT_DISCHARGING
+        # Sign convention: positive = charging, negative = discharging.
+        power = self._get_sensor_value(
+            self._entry.data.get(CONF_BATTERY_POWER_SENSOR)
+        )
+        if power is not None:
+            return power < -10
+        return False
+
     def _battery_blocks_solar_charge(self) -> bool:
         """True when SOC sensor configured and SOC below the min threshold.
 
@@ -200,11 +233,17 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _get_grid_available_amps(self) -> float:
         """Calculate max amps available from grid without overloading.
 
-        Uses the actual grid import (from grid_export_sensor) to size the
-        EV target, so the home battery's discharge is correctly credited
-        against household load instead of being assumed to come from the
-        grid. Falls back to house-consumption math if the grid sensor is
-        unavailable.
+        Two views of the non-EV load:
+          * grid_export-based: credits whatever the battery is currently
+            sourcing. Only valid while the battery is committed to
+            discharge — otherwise the credit is phantom and will vanish
+            (depleted SOC, inverter flipping to charge) leaving the EV
+            ramped past the fuse cap.
+          * house_consumption-based: battery-independent. Always safe.
+
+        Takes the worse case so phantom battery credit cannot overstate
+        headroom, while still subtracting any active battery-charge draw
+        from the grid headroom.
         """
         voltage = self._get_voltage()
         if voltage <= 0:
@@ -214,24 +253,43 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         charger_power = self._get_actual_charger_amps() * voltage
 
+        house_consumption = self._get_sensor_value(
+            self._entry.data.get(CONF_HOUSE_CONSUMPTION_SENSOR)
+        )
         grid_export = self._get_sensor_value(
             self._entry.data.get(CONF_GRID_EXPORT_SENSOR)
         )
-        if grid_export is not None:
-            # Sign convention: positive = exporting, negative = importing.
-            current_import = max(0, -grid_export)
-            grid_headroom = max(0, grid_max_power - current_import)
-            # EV can keep its current grid share plus whatever headroom
-            # remains on the fuse — the battery/solar continue to absorb
-            # the non-EV load as before.
-            available_watts = charger_power + grid_headroom
-        else:
-            house_consumption = self._get_sensor_value(
-                self._entry.data.get(CONF_HOUSE_CONSUMPTION_SENSOR)
-            ) or 0
-            household_only = max(0, house_consumption - charger_power)
-            available_watts = grid_max_power - household_only
 
+        # Battery-independent view of the non-EV load.
+        if house_consumption is not None:
+            non_ev_household = max(0, house_consumption - charger_power)
+        else:
+            non_ev_household = None
+
+        # Grid-meter view, only trusted when battery is committed to
+        # keep discharging.
+        if grid_export is not None and self._battery_is_discharging():
+            current_import = max(0, -grid_export)
+            non_ev_grid = max(0, current_import - charger_power)
+        else:
+            non_ev_grid = None
+
+        # Pick the worse case so we never overestimate headroom.
+        candidates = [
+            c for c in (non_ev_household, non_ev_grid) if c is not None
+        ]
+        if candidates:
+            non_ev_load = max(candidates)
+        elif grid_export is not None:
+            # No consumption sensor and battery not discharging: use raw
+            # import minus charger as a coarse proxy (still safe — does
+            # not credit phantom battery contribution).
+            current_import = max(0, -grid_export)
+            non_ev_load = max(0, current_import - charger_power)
+        else:
+            non_ev_load = 0
+
+        available_watts = grid_max_power - non_ev_load
         return max(0, available_watts / voltage)
 
     def _calculate_solar_only(self, available_power: float) -> float:
