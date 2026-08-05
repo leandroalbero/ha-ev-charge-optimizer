@@ -119,11 +119,16 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
 
     def _get_voltage(self) -> float:
-        """Get current voltage from sensor or static config."""
+        """Get current voltage from sensor or static config.
+
+        Car-side charger voltage sensors (e.g. Tesla) read ~1.5 V pilot
+        voltage while the car is idle; dividing watts by that commands
+        max amps at charge start. Only trust plausible mains readings.
+        """
         voltage_entity = self._entry.data.get(CONF_VOLTAGE_SENSOR)
         if voltage_entity:
             val = self._get_sensor_value(voltage_entity)
-            if val and val > 0:
+            if val and 100 <= val <= 260:
                 return val
         return float(self._opt(CONF_STATIC_VOLTAGE, DEFAULT_STATIC_VOLTAGE))
 
