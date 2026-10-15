@@ -64,6 +64,10 @@ After setup, configure advanced parameters via the integration's options:
 | Valley Start/End | 23:00–07:00 | Off-peak time window for Valley mode |
 | Valley Amps | 16A | Charging rate during Valley hours |
 | Guaranteed Min Amps | 8A | Minimum amps for Min Solar + Grid Top-up mode |
+| EV Charging State Sensor | — | Optional. Car's charging state (e.g. `Charging`, `Complete`, `Disconnected`). Stops regulation when the car is full or unplugged, and stops counting the amp setpoint as draw while the car is idle |
+| EV Charge Limit Entity | — | Optional. Car's charge limit (%). With the EV SoC sensor, charging stops once SoC reaches it |
+
+When the car cannot charge (full, unplugged, or at its limit) the charger switch is turned off (retried at most every 5 minutes), amps are not written and the car is not woken. The wake button is pressed at most once every 15 minutes. Surplus never exceeds solar production minus household load, so home-battery discharge exported for a few seconds is not mistaken for solar.
 
 ## Entities
 

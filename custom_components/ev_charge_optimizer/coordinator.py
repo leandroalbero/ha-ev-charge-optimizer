@@ -17,6 +17,8 @@ from .const import (
     CONF_BATTERY_POWER_SENSOR,
     CONF_BATTERY_SOC_SENSOR,
     CONF_EV_SOC_SENSOR,
+    CONF_EV_CHARGE_LIMIT_ENTITY,
+    CONF_EV_CHARGING_STATE_SENSOR,
     CONF_CHARGER_NUMBER_ENTITY,
     CONF_CHARGER_SWITCH_ENTITY,
     CONF_CHARGER_WAKE_ENTITY,
@@ -59,6 +61,16 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+WAKE_COOLDOWN = timedelta(minutes=15)
+SWITCH_OFF_RETRY = timedelta(minutes=5)
+_DRAWING_STATES = frozenset({"charging", "starting"})
+_NOT_CHARGEABLE_STATES = frozenset({"complete", "disconnected"})
+
+
+def _now() -> datetime:
+    """Clock seam for the wake cooldown."""
+    return datetime.now()
+
 
 def _parse_hhmm(value: str):
     """Parse a time string from HA TimeSelector (HH:MM or HH:MM:SS)."""
@@ -82,6 +94,8 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             maxlen=int(self._opt(CONF_ROLLING_WINDOW, DEFAULT_ROLLING_WINDOW))
         )
         self._last_target: float = 0
+        self._last_wake_at: datetime | None = None
+        self._charger_off_sent_at: datetime | None = None
         self.enabled: bool = True
         self.mode: ChargeMode = ChargeMode(
             entry.data.get("default_mode", ChargeMode.SOLAR_ONLY)
@@ -119,11 +133,16 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
 
     def _get_voltage(self) -> float:
-        """Get current voltage from sensor or static config."""
+        """Get current voltage from sensor or static config.
+
+        Car-side charger voltage sensors (e.g. Tesla) read ~1.5 V pilot
+        voltage while the car is idle; dividing watts by that commands
+        max amps at charge start. Only trust plausible mains readings.
+        """
         voltage_entity = self._entry.data.get(CONF_VOLTAGE_SENSOR)
         if voltage_entity:
             val = self._get_sensor_value(voltage_entity)
-            if val and val > 0:
+            if val and 100 <= val <= 260:
                 return val
         return float(self._opt(CONF_STATIC_VOLTAGE, DEFAULT_STATIC_VOLTAGE))
 
@@ -158,6 +177,101 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self._get_sensor_value(
             self._entry.data.get(CONF_EV_SOC_SENSOR)
         )
+
+    def _entity(self, key: str) -> str | None:
+        """Entity id from options, else data; blank means unset."""
+        for source in (self._entry.options, self._entry.data):
+            value = source.get(key)
+            if value:
+                return str(value)
+        return None
+
+    def _charging_state(self) -> str | None:
+        """Raw charging-state text, or None if unset or unavailable."""
+        return self._get_sensor_state(
+            self._entity(CONF_EV_CHARGING_STATE_SENSOR)
+        )
+
+    def _state_allows_draw(self) -> bool:
+        """True unless a charging-state sensor says the car is idle."""
+        entity = self._entity(CONF_EV_CHARGING_STATE_SENSOR)
+        if not entity:
+            return True
+        state = self._get_sensor_state(entity)
+        if state is None:
+            return False
+        return state.strip().casefold() in _DRAWING_STATES
+
+    def _soc_at_charge_limit(self) -> bool:
+        """True when EV SoC has reached the configured charge limit."""
+        limit = self._get_sensor_value(
+            self._entity(CONF_EV_CHARGE_LIMIT_ENTITY)
+        )
+        soc = self._get_ev_soc()
+        if limit is None or soc is None:
+            return False
+        return soc >= limit
+
+    def _car_can_charge(self) -> bool:
+        """False when the car is finished, unplugged, or at its limit."""
+        state = self._charging_state()
+        if (
+            state is not None
+            and state.strip().casefold() in _NOT_CHARGEABLE_STATES
+        ):
+            return False
+        return not self._soc_at_charge_limit()
+
+    def _measured_charger_power(self, voltage: float) -> float:
+        """Setpoint watts only while the car is actually drawing."""
+        if self._is_charger_switch_on() is False:
+            return 0.0
+        if not self._state_allows_draw():
+            return 0.0
+        return self._get_actual_charger_amps() * voltage
+
+    def _solar_surplus_cap(self, charger_power: float) -> float | None:
+        """PV minus household load, or None if PV is unavailable."""
+        pv = self._get_sensor_value(
+            self._entry.data.get(CONF_SOLAR_PRODUCTION_SENSOR)
+        )
+        if pv is None:
+            return None
+        house = (
+            self._get_sensor_value(
+                self._entry.data.get(CONF_HOUSE_CONSUMPTION_SENSOR)
+            )
+            or 0.0
+        )
+        return pv - max(0.0, house - charger_power)
+
+    def _record_reading(self, reading: float, charger_power: float) -> None:
+        """Store one surplus sample, capped at real solar production."""
+        cap = self._solar_surplus_cap(charger_power)
+        if cap is not None:
+            # Export can include home-battery discharge; that is not solar.
+            reading = min(reading, cap)
+        self._readings.append(reading)
+
+    def _wake_due(self) -> bool:
+        """True when the car can charge and the wake cooldown has elapsed."""
+        if not self._car_can_charge():
+            return False
+        if self._last_wake_at is None:
+            return True
+        return _now() - self._last_wake_at >= WAKE_COOLDOWN
+
+    async def _async_stop_unchargeable(self) -> None:
+        """Target 0 and switch the charger off, retrying sparingly; never wake or set amps."""
+        self._last_target = 0
+        if self._is_charger_switch_on() is not True:
+            self._charger_off_sent_at = None
+            return
+        now = _now()
+        if self._charger_off_sent_at and now - self._charger_off_sent_at < SWITCH_OFF_RETRY:
+            return
+        self._charger_off_sent_at = now
+        await self._async_set_charger_switch(False)
 
     def _ev_at_valley_target(self) -> bool:
         """True when EV SOC sensor configured and SOC has hit the valley cap.
@@ -199,7 +313,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _is_valley_time(self) -> bool:
         """Check if current time is within valley/off-peak window."""
-        now = datetime.now().time()
+        now = _now().time()
         start_str = self._opt(CONF_VALLEY_START, DEFAULT_VALLEY_START)
         end_str = self._opt(CONF_VALLEY_END, DEFAULT_VALLEY_END)
         start = _parse_hhmm(start_str)
@@ -317,6 +431,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not entity_id:
             return
         _LOGGER.debug("Charger entity unavailable, pressing wake button")
+        self._last_wake_at = _now()
         await self.hass.services.async_call(
             "button",
             "press",
@@ -353,7 +468,8 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Wake the car if charger entity is unavailable (asleep)
         if not self._is_charger_available():
-            await self._async_wake_charger()
+            if self._wake_due():
+                await self._async_wake_charger()
             return
 
         # Ensure switch is on before sending amps
@@ -382,15 +498,19 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "enabled": False,
             }
 
+        if not self._car_can_charge():
+            await self._async_stop_unchargeable()
+            return {
+                "target_amps": 0,
+                "available_power": 0,
+                "mode": self.mode,
+                "enabled": True,
+            }
+        self._charger_off_sent_at = None
+
         voltage = self._get_voltage()
         power_buffer = float(self._opt(CONF_POWER_BUFFER, DEFAULT_POWER_BUFFER))
-
-        # Use actual charger draw (from entity state), not the theoretical
-        # target.  If the charger didn't accept the command (BLE glitch,
-        # car asleep, unplugged …) the real draw is 0 and we must not
-        # pretend otherwise — that inflates the surplus with phantom watts.
-        actual_charger_amps = self._get_actual_charger_amps()
-        charger_power = actual_charger_amps * voltage
+        charger_power = self._measured_charger_power(voltage)
 
         prioritize_battery = bool(
             self._opt(CONF_PRIORITIZE_BATTERY, DEFAULT_PRIORITIZE_BATTERY)
@@ -421,9 +541,9 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "enabled": True,
                 }
             if grid_export > 0:
-                self._readings.append(grid_export + charger_power)
+                self._record_reading(grid_export + charger_power, charger_power)
             else:
-                self._readings.append(0)
+                self._record_reading(0, charger_power)
         else:
             # EV-first: use all solar surplus (solar minus house).
             # Subtract charger draw from house consumption to avoid
@@ -450,8 +570,9 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # routing to the battery (e.g. while the MPC controller is
             # charging it).
             battery_demand = self._get_battery_charge_demand()
-            self._readings.append(
-                solar_production - household_only - battery_demand
+            self._record_reading(
+                solar_production - household_only - battery_demand,
+                charger_power,
             )
 
         solar_surplus = self._rolling_average() - power_buffer

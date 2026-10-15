@@ -10,7 +10,9 @@
           "house_consumption_sensor": "House Consumption Sensor",
           "battery_soc_sensor": "Home Battery SOC Sensor (optional)",
           "battery_power_sensor": "Home Battery Power Sensor (optional, +charging/-discharging)",
-          "ev_soc_sensor": "EV Battery SOC Sensor (optional, used by Valley target SOC)"
+          "ev_soc_sensor": "EV Battery SOC Sensor (optional, used by Valley target SOC)",
+          "ev_charging_state_sensor": "EV Charging State Sensor (optional)",
+          "ev_charge_limit_entity": "EV Charge Limit (optional, number or sensor)"
         }
       },
       "charger": {
@@ -40,6 +42,8 @@
           "battery_soc_sensor": "Home Battery SOC Sensor (optional)",
           "battery_power_sensor": "Home Battery Power Sensor (optional, +charging/-discharging)",
           "ev_soc_sensor": "EV Battery SOC Sensor (optional, used by Valley target SOC)",
+          "ev_charging_state_sensor": "EV Charging State Sensor (optional)",
+          "ev_charge_limit_entity": "EV Charge Limit (optional, number or sensor)",
           "charger_number_entity": "Charger Amps Entity",
           "charger_switch_entity": "Charger Power Switch (optional)",
           "charger_wake_entity": "Car Wake Button (optional)",
@@ -83,7 +87,9 @@
           "valley_amps": "Valley Charging Amps",
           "valley_target_soc": "Valley Target SOC (stop charging at this EV %)",
           "guaranteed_min_amps": "Guaranteed Min Amps (Top-up mode)",
-          "grid_max_power": "Grid Max Power (W)"
+          "grid_max_power": "Grid Max Power (W)",
+          "ev_charging_state_sensor": "EV Charging State Sensor (optional)",
+          "ev_charge_limit_entity": "EV Charge Limit (optional, number or sensor)"
         }
       }
     }
