@@ -26,6 +26,8 @@ from .const import (
     CONF_BATTERY_POWER_SENSOR,
     CONF_BATTERY_SOC_SENSOR,
     CONF_EV_SOC_SENSOR,
+    CONF_EV_CHARGE_LIMIT_ENTITY,
+    CONF_EV_CHARGING_STATE_SENSOR,
     CONF_CHARGER_NUMBER_ENTITY,
     CONF_CHARGER_SWITCH_ENTITY,
     CONF_CHARGER_WAKE_ENTITY,
@@ -109,6 +111,12 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                     ),
                     vol.Optional(CONF_EV_SOC_SENSOR): EntitySelector(
                         EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(CONF_EV_CHARGING_STATE_SENSOR): EntitySelector(
+                        EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(CONF_EV_CHARGE_LIMIT_ENTITY): EntitySelector(
+                        EntitySelectorConfig(domain=["number", "sensor"])
                     ),
                 }
             ),
@@ -271,17 +279,35 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                         },
                     ): EntitySelector(EntitySelectorConfig(domain="sensor")),
                     vol.Optional(
+                        CONF_EV_SOC_SENSOR,
+                        description={
+                            "suggested_value": current.get(CONF_EV_SOC_SENSOR)
+                        },
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    vol.Optional(
+                        CONF_EV_CHARGING_STATE_SENSOR,
+                        description={
+                            "suggested_value": current.get(
+                                CONF_EV_CHARGING_STATE_SENSOR
+                            )
+                        },
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    vol.Optional(
+                        CONF_EV_CHARGE_LIMIT_ENTITY,
+                        description={
+                            "suggested_value": current.get(
+                                CONF_EV_CHARGE_LIMIT_ENTITY
+                            )
+                        },
+                    ): EntitySelector(
+                        EntitySelectorConfig(domain=["number", "sensor"])
+                    ),
+                    vol.Optional(
                         CONF_BATTERY_POWER_SENSOR,
                         description={
                             "suggested_value": current.get(
                                 CONF_BATTERY_POWER_SENSOR
                             )
-                        },
-                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
-                    vol.Optional(
-                        CONF_EV_SOC_SENSOR,
-                        description={
-                            "suggested_value": current.get(CONF_EV_SOC_SENSOR)
                         },
                     ): EntitySelector(EntitySelectorConfig(domain="sensor")),
                     vol.Required(
@@ -533,6 +559,24 @@ class EVChargeOptimizerOptionsFlow(OptionsFlow):
                             unit_of_measurement="W",
                             mode=NumberSelectorMode.BOX,
                         )
+                    ),
+                    vol.Optional(
+                        CONF_EV_CHARGING_STATE_SENSOR,
+                        description={
+                            "suggested_value": current.get(
+                                CONF_EV_CHARGING_STATE_SENSOR
+                            )
+                        },
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    vol.Optional(
+                        CONF_EV_CHARGE_LIMIT_ENTITY,
+                        description={
+                            "suggested_value": current.get(
+                                CONF_EV_CHARGE_LIMIT_ENTITY
+                            )
+                        },
+                    ): EntitySelector(
+                        EntitySelectorConfig(domain=["number", "sensor"])
                     ),
                 }
             ),

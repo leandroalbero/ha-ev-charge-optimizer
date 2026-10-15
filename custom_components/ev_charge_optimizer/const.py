@@ -12,6 +12,8 @@ CONF_VOLTAGE_SENSOR = "voltage_sensor"
 CONF_BATTERY_SOC_SENSOR = "battery_soc_sensor"
 CONF_BATTERY_POWER_SENSOR = "battery_power_sensor"
 CONF_EV_SOC_SENSOR = "ev_soc_sensor"
+CONF_EV_CHARGING_STATE_SENSOR = "ev_charging_state_sensor"
+CONF_EV_CHARGE_LIMIT_ENTITY = "ev_charge_limit_entity"
 
 # Config keys - charger
 CONF_CHARGER_NUMBER_ENTITY = "charger_number_entity"
