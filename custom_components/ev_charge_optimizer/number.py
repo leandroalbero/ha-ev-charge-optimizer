@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.components.number import NumberEntity, NumberMode, RestoreNumber
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfElectricCurrent
+from homeassistant.const import PERCENTAGE, UnitOfElectricCurrent
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DEFAULT_MAX_AMPS, DEFAULT_MIN_AMPS, DOMAIN
+from .const import DEFAULT_MAX_EV_SOC, DOMAIN
 from .coordinator import EVChargeOptimizerCoordinator
 
 
@@ -24,6 +24,7 @@ async def async_setup_entry(
         [
             MinAmpsNumber(coordinator, entry),
             MaxAmpsNumber(coordinator, entry),
+            MaxEvSocNumber(coordinator, entry),
         ]
     )
 
@@ -101,4 +102,51 @@ class MaxAmpsNumber(
     async def async_set_native_value(self, value: float) -> None:
         """Update max amps."""
         self.coordinator.max_amps = value
+        await self.coordinator.async_request_refresh()
+
+
+class MaxEvSocNumber(
+    CoordinatorEntity[EVChargeOptimizerCoordinator], RestoreNumber
+):
+    """Slider cap below the car's own charge limit. Tesla will not go under 50%."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Maximum EV Charge"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_mode = NumberMode.SLIDER
+    _attr_native_min_value = 0
+    _attr_native_max_value = 100
+    _attr_native_step = 1
+
+    def __init__(
+        self,
+        coordinator: EVChargeOptimizerCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        """Initialize."""
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_max_ev_soc"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": "EV Charge Optimizer",
+            "manufacturer": "EV Charge Optimizer",
+        }
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the slider so a restart keeps the user's cap."""
+        await super().async_added_to_hass()
+        last = await self.async_get_last_number_data()
+        if last is not None and last.native_value is not None:
+            self.coordinator.max_ev_soc = float(last.native_value)
+        else:
+            self.coordinator.max_ev_soc = DEFAULT_MAX_EV_SOC
+
+    @property
+    def native_value(self) -> float:
+        """Return the SOC cap."""
+        return self.coordinator.max_ev_soc
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Update the SOC cap."""
+        self.coordinator.max_ev_soc = value
         await self.coordinator.async_request_refresh()

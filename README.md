@@ -7,7 +7,7 @@ A Home Assistant integration that optimizes EV charger power based on available 
 ## Features
 
 - **Solar Only** — Charge exclusively from surplus solar power. Ramps amps up/down based on export, stops when insufficient.
-- **Max Solar + Grid** — Charge at maximum amps regardless of solar availability.
+- **Max Power** (formerly Max Solar + Grid) — Charge at maximum amps the grid cap allows, plus solar.
 - **Valley / Off-Peak** — Schedule charging at a fixed rate during configurable off-peak hours. Reverts to Solar Only outside the window.
 - **Min Solar + Grid Top-up** — Use solar surplus when available, with a guaranteed minimum charge rate from the grid.
 
@@ -66,8 +66,16 @@ After setup, configure advanced parameters via the integration's options:
 | Guaranteed Min Amps | 8A | Minimum amps for Min Solar + Grid Top-up mode |
 | EV Charging State Sensor | — | Optional. Car's charging state (e.g. `Charging`, `Complete`, `Disconnected`). Stops regulation when the car is full or unplugged, and stops counting the amp setpoint as draw while the car is idle |
 | EV Charge Limit Entity | — | Optional. Car's charge limit (%). With the EV SoC sensor, charging stops once SoC reaches it |
+| EV Power Sensor | — | Optional. Actual EV draw (`kW` or `W`). Grid headroom uses this instead of the amp setpoint. Without it, the setpoint counts only while the car is drawing |
+| Battery power positive when discharging | off | Optional. Enable for inverters whose battery power is positive while discharging (e.g. GoodWe). Default keeps positive = charging |
+| Loads to shed | — | Optional, Max Power only. Ordered switches, lights, or input booleans turned off one at a time while the grid cap is binding. Only loads this integration turned off are restored |
+| Max shed minutes | 120 | Longest a shed load stays off. After that, loads come back on and shedding waits 30 minutes |
 
-When the car cannot charge (full, unplugged, or at its limit) the charger switch is turned off (retried at most every 5 minutes), amps are not written and the car is not woken. The wake button is pressed at most once every 15 minutes. Surplus never exceeds solar production minus household load, so home-battery discharge exported for a few seconds is not mistaken for solar.
+When the car cannot charge (full, unplugged, at its charge limit, or at the Maximum EV Charge slider) the charger switch is turned off (retried at most every 5 minutes), amps are not written and the car is not woken. The wake button is pressed at most once every 15 minutes. Surplus never exceeds solar production minus household load, so home-battery discharge exported for a few seconds is not mistaken for solar.
+
+In Max Power, Valley, and Min top-up, grid headroom is `grid cap − live import − battery discharge + battery charge taken from the grid + measured EV draw`. A home battery discharging into the house is not treated as spare grid capacity, and a charger setpoint the car is not actually pulling is not treated as draw. Battery charge is yieldable only up to live import, so the EV can take grid power that was charging the home battery, but not solar that was.
+
+In Max Power only, while that headroom is below max amps, the optimizer can turn off the next still-on load in the shed list (at most one per minute). Those loads are turned back on when the mode changes, the optimizer is disabled, the car cannot charge, the EV draws nothing for three cycles, the shed reaches its max minutes, or Home Assistant restarts. A shed that hits the time limit is not repeated for 30 minutes.
 
 ## Entities
 
@@ -75,12 +83,15 @@ The integration creates the following entities:
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| Charging Mode | Select | Choose between Solar Only, Max Solar + Grid, Valley, Min Solar + Grid Top-up |
+| Charging Mode | Select | Choose between Solar Only, Max Power, Valley, Min Solar + Grid Top-up |
 | Enabled | Switch | Master on/off for the optimizer |
 | Target Amps | Sensor | Current amperage target being sent to the charger |
-| Available Power | Sensor | Calculated surplus power available for charging (W) |
+| Available Power | Sensor | Calculated surplus power available for charging (W). In grid modes this is contract headroom, capped at max amps |
+| EV Power | Sensor | Measured EV draw (W), updated every cycle, including 0 when not charging |
+| Shed Loads | Sensor | Count of loads this optimizer has turned off. Attribute `shed_loads` lists the entity ids |
 | Minimum Amps | Number | Below this threshold, charging stops |
 | Maximum Amps | Number | Upper amperage cap |
+| Maximum EV Charge | Number | Slider (0–100%) persisted across restarts. Charging stops at the lower of this and the car's charge limit |
 
 ## How It Works
 

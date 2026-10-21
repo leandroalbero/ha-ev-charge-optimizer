@@ -10,18 +10,21 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.debounce import Debouncer
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
     CONF_BATTERY_MIN_SOC,
+    CONF_BATTERY_POWER_POSITIVE_DISCHARGE,
     CONF_BATTERY_POWER_SENSOR,
     CONF_BATTERY_SOC_SENSOR,
-    CONF_EV_SOC_SENSOR,
-    CONF_EV_CHARGE_LIMIT_ENTITY,
-    CONF_EV_CHARGING_STATE_SENSOR,
     CONF_CHARGER_NUMBER_ENTITY,
     CONF_CHARGER_SWITCH_ENTITY,
     CONF_CHARGER_WAKE_ENTITY,
+    CONF_EV_CHARGE_LIMIT_ENTITY,
+    CONF_EV_CHARGING_STATE_SENSOR,
+    CONF_EV_POWER_SENSOR,
+    CONF_EV_SOC_SENSOR,
     CONF_GRID_EXPORT_SENSOR,
     CONF_GRID_MAX_POWER,
     CONF_GUARANTEED_MIN_AMPS,
@@ -32,29 +35,34 @@ from .const import (
     CONF_POWER_BUFFER,
     CONF_PRIORITIZE_BATTERY,
     CONF_ROLLING_WINDOW,
+    CONF_SHED_LOADS,
+    CONF_SHED_MAX_MINUTES,
     CONF_SOLAR_PRODUCTION_SENSOR,
     CONF_STATIC_VOLTAGE,
     CONF_UPDATE_INTERVAL,
     CONF_VALLEY_AMPS,
-    CONF_VALLEY_TARGET_SOC,
     CONF_VALLEY_END,
     CONF_VALLEY_START,
+    CONF_VALLEY_TARGET_SOC,
     CONF_VOLTAGE_SENSOR,
     DEFAULT_BATTERY_MIN_SOC,
+    DEFAULT_BATTERY_POWER_POSITIVE_DISCHARGE,
     DEFAULT_GRID_MAX_POWER,
     DEFAULT_GUARANTEED_MIN_AMPS,
     DEFAULT_MAX_AMPS,
+    DEFAULT_MAX_EV_SOC,
     DEFAULT_MAX_STEP,
     DEFAULT_MIN_AMPS,
     DEFAULT_POWER_BUFFER,
     DEFAULT_PRIORITIZE_BATTERY,
     DEFAULT_ROLLING_WINDOW,
+    DEFAULT_SHED_MAX_MINUTES,
     DEFAULT_STATIC_VOLTAGE,
     DEFAULT_UPDATE_INTERVAL,
     DEFAULT_VALLEY_AMPS,
-    DEFAULT_VALLEY_TARGET_SOC,
     DEFAULT_VALLEY_END,
     DEFAULT_VALLEY_START,
+    DEFAULT_VALLEY_TARGET_SOC,
     DOMAIN,
     ChargeMode,
 )
@@ -63,8 +71,13 @@ _LOGGER = logging.getLogger(__name__)
 
 WAKE_COOLDOWN = timedelta(minutes=15)
 SWITCH_OFF_RETRY = timedelta(minutes=5)
+SHED_STEP_DWELL = timedelta(seconds=60)
+SHED_COOLDOWN = timedelta(minutes=30)
+SHED_IDLE_CYCLES = 3
+_SHED_STORE_VERSION = 1
 _DRAWING_STATES = frozenset({"charging", "starting"})
 _NOT_CHARGEABLE_STATES = frozenset({"complete", "disconnected"})
+_KW_UNITS = frozenset({"kw", "kilowatt", "kilowatts"})
 
 
 def _now() -> datetime:
@@ -102,6 +115,19 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.min_amps: float = self._opt(CONF_MIN_AMPS, DEFAULT_MIN_AMPS)
         self.max_amps: float = self._opt(CONF_MAX_AMPS, DEFAULT_MAX_AMPS)
+        self.max_ev_soc: float = DEFAULT_MAX_EV_SOC
+        self._shed_ids: list[str] = []
+        self._shed_started_at: datetime | None = None
+        self._last_shed_at: datetime | None = None
+        self._shed_cooldown_until: datetime | None = None
+        self._zero_ev_cycles = 0
+        self._shed_store_loaded = False
+        self._defer_shed = False
+        self._shed_store: Store[dict[str, Any]] = Store(
+            hass,
+            _SHED_STORE_VERSION,
+            f"{DOMAIN}.shed.{entry.entry_id}",
+        )
 
         interval = int(self._opt(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL))
         super().__init__(
@@ -158,19 +184,63 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._entry.data.get(CONF_BATTERY_SOC_SENSOR)
         )
 
+    def _get_power_watts(self, entity_id: str | None) -> float | None:
+        """Read a power sensor as watts, honouring kW vs W."""
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        try:
+            value = float(state.state)
+        except (ValueError, TypeError):
+            return None
+        unit = str(state.attributes.get("unit_of_measurement") or "")
+        if unit.casefold() in _KW_UNITS:
+            return value * 1000
+        return value
+
+    def _battery_positive_discharge(self) -> bool:
+        """True when the battery sensor's positive sign means discharge."""
+        return bool(
+            self._opt(
+                CONF_BATTERY_POWER_POSITIVE_DISCHARGE,
+                DEFAULT_BATTERY_POWER_POSITIVE_DISCHARGE,
+            )
+        )
+
+    def _battery_flows(self) -> tuple[float, float]:
+        """Return (charge_w, discharge_w), both >= 0."""
+        val = self._get_sensor_value(self._entity(CONF_BATTERY_POWER_SENSOR))
+        if val is None:
+            return 0.0, 0.0
+        if self._battery_positive_discharge():
+            return max(0.0, -val), max(0.0, val)
+        return max(0.0, val), max(0.0, -val)
+
     def _get_battery_charge_demand(self) -> float:
         """Battery power being absorbed (W); 0 if discharging or unconfigured.
 
-        Sign convention: positive = charging (sink), negative = discharging
-        (source). Only the charging draw competes with the EV for solar, so
-        we clamp to zero when the battery is exporting to the house.
+        Only the charging draw competes with the EV for solar. Sign follows
+        CONF_BATTERY_POWER_POSITIVE_DISCHARGE (default: positive = charging).
         """
-        val = self._get_sensor_value(
-            self._entry.data.get(CONF_BATTERY_POWER_SENSOR)
-        )
-        if val is None:
-            return 0
-        return max(0, val)
+        charge_w, _discharge_w = self._battery_flows()
+        return charge_w
+
+    def _measured_ev_watts(self) -> float:
+        """Actual EV draw, from the power sensor or the live setpoint."""
+        sensor = self._entity(CONF_EV_POWER_SENSOR)
+        if sensor:
+            watts = self._get_power_watts(sensor)
+            if watts is not None:
+                watts = max(0.0, watts)
+                # The power sensor lags the setpoint by up to ~30 s; after a
+                # ramp-down the stale reading would invent headroom.
+                if self._is_charger_available():
+                    setpoint_w = self._get_actual_charger_amps() * self._get_voltage()
+                    return min(watts, setpoint_w)
+                return watts
+        return self._measured_charger_power(self._get_voltage())
 
     def _get_ev_soc(self) -> float | None:
         """Read EV state-of-charge percentage if sensor configured."""
@@ -203,14 +273,17 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return state.strip().casefold() in _DRAWING_STATES
 
     def _soc_at_charge_limit(self) -> bool:
-        """True when EV SoC has reached the configured charge limit."""
+        """True when EV SoC has reached the tighter of car limit and slider."""
+        soc = self._get_ev_soc()
+        if soc is None:
+            return False
+        cap = float(self.max_ev_soc)
         limit = self._get_sensor_value(
             self._entity(CONF_EV_CHARGE_LIMIT_ENTITY)
         )
-        soc = self._get_ev_soc()
-        if limit is None or soc is None:
-            return False
-        return soc >= limit
+        if limit is not None:
+            cap = min(cap, limit)
+        return soc >= cap
 
     def _car_can_charge(self) -> bool:
         """False when the car is finished, unplugged, or at its limit."""
@@ -324,32 +397,57 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Overnight window (e.g., 23:00 - 07:00)
         return now >= start or now <= end
 
-    def _get_grid_available_amps(self) -> float:
-        """Charger amps that keep grid import at or below grid_max_power.
+    def _grid_headroom_watts(self) -> float | None:
+        """Watts the EV can draw without exceeding the grid contract.
 
-        Treats grid import as the controlled variable: each cycle adds
-        the gap between live import and the cap (as amps) to the
-        charger's current setpoint. Solar and battery contribution flow
-        into the charger on top of the grid cap, so the EV can ramp up
-        to ``max_amps`` whenever they cover the difference. When grid
-        import would overshoot, the gap goes negative and the setpoint
-        drops on the next cycle.
+        Battery discharge is not grid capacity. Battery charge counts only
+        up to live import: solar-fed charging is not a grid load the EV can
+        reclaim. Measured EV draw is added back so a high setpoint that the
+        car is not pulling does not invent headroom.
         """
-        voltage = self._get_voltage()
-        if voltage <= 0:
-            return 0
-        grid_max_power = float(
-            self._opt(CONF_GRID_MAX_POWER, DEFAULT_GRID_MAX_POWER)
-        )
         grid_export = self._get_sensor_value(
             self._entry.data.get(CONF_GRID_EXPORT_SENSOR)
         )
         if grid_export is None:
+            return None
+        live_import = max(0.0, -grid_export)
+        charge_w, discharge_w = self._battery_flows()
+        charge_from_grid = min(charge_w, live_import)
+        grid_max_power = float(
+            self._opt(CONF_GRID_MAX_POWER, DEFAULT_GRID_MAX_POWER)
+        )
+        return max(
+            0.0,
+            grid_max_power
+            - live_import
+            - discharge_w
+            + charge_from_grid
+            + self._measured_ev_watts(),
+        )
+
+    def _get_grid_available_amps(self) -> float:
+        """Charger amps that keep grid import at or below grid_max_power."""
+        voltage = self._get_voltage()
+        headroom = self._grid_headroom_watts()
+        if voltage <= 0 or headroom is None:
             return 0
-        current_import = max(0.0, -grid_export)
-        headroom_watts = grid_max_power - current_import
-        actual_amps = self._get_actual_charger_amps()
-        return max(0.0, actual_amps + headroom_watts / voltage)
+        return headroom / voltage
+
+    def _grid_available_power(self) -> float:
+        """Headroom watts capped at the amp limit, for the available-power sensor."""
+        voltage = self._get_voltage()
+        headroom = self._grid_headroom_watts()
+        if voltage <= 0 or headroom is None:
+            return 0.0
+        return min(headroom, self.max_amps * voltage)
+
+    def _grid_limited(self) -> bool:
+        """True when raw contract headroom cannot reach max amps."""
+        voltage = self._get_voltage()
+        headroom = self._grid_headroom_watts()
+        if voltage <= 0 or headroom is None:
+            return False
+        return headroom / voltage < self.max_amps
 
     def _calculate_solar_only(self, available_power: float) -> float:
         """Solar Only: charge from surplus only."""
@@ -359,7 +457,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return available_power / voltage
 
     def _calculate_max_grid(self) -> float:
-        """Max Solar + Grid: charge at max without exceeding grid capacity."""
+        """Max Power: charge at max without exceeding grid capacity."""
         return min(self.max_amps, self._get_grid_available_amps())
 
     def _calculate_valley(self, available_power: float) -> float:
@@ -486,31 +584,158 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             {"entity_id": entity_id, "value": rounded},
         )
 
+    def _shed_load_ids(self) -> list[str]:
+        """Configured shed order; absent key means shed nothing."""
+        raw = self._opt(CONF_SHED_LOADS, None)
+        if not raw:
+            return []
+        if isinstance(raw, str):
+            return [raw]
+        return [str(item) for item in raw if item]
+
+    def _shed_max_minutes(self) -> float:
+        return float(self._opt(CONF_SHED_MAX_MINUTES, DEFAULT_SHED_MAX_MINUTES))
+
+    def _is_load_on(self, entity_id: str) -> bool:
+        state = self.hass.states.get(entity_id)
+        return state is not None and state.state == "on"
+
+    async def _async_set_load(self, entity_id: str, on: bool) -> None:
+        domain = entity_id.split(".", 1)[0]
+        await self.hass.services.async_call(
+            domain,
+            "turn_on" if on else "turn_off",
+            {"entity_id": entity_id},
+        )
+
+    async def _async_save_shed(self) -> None:
+        started = (
+            self._shed_started_at.isoformat() if self._shed_started_at else None
+        )
+        await self._shed_store.async_save(
+            {"entity_ids": list(self._shed_ids), "started_at": started}
+        )
+
+    async def _async_restore_persisted_shed_once(self) -> None:
+        """Turn shed loads back on after a restart so a fridge is not left off."""
+        if self._shed_store_loaded:
+            return
+        self._shed_store_loaded = True
+        stored = await self._shed_store.async_load()
+        if not stored:
+            return
+        entity_ids = [str(item) for item in stored.get("entity_ids") or [] if item]
+        if not entity_ids:
+            return
+        for entity_id in entity_ids:
+            await self._async_set_load(entity_id, True)
+        self._defer_shed = True
+        await self._shed_store.async_save({"entity_ids": [], "started_at": None})
+
+    async def _async_restore_shed(self, *, cooldown: bool) -> None:
+        if not self._shed_ids and not cooldown:
+            return
+        for entity_id in list(self._shed_ids):
+            await self._async_set_load(entity_id, True)
+        self._shed_ids.clear()
+        self._shed_started_at = None
+        self._last_shed_at = None
+        self._zero_ev_cycles = 0
+        if cooldown:
+            self._shed_cooldown_until = _now() + SHED_COOLDOWN
+        await self._async_save_shed()
+
+    async def _async_shed_next(self) -> None:
+        if self._defer_shed:
+            self._defer_shed = False
+            return
+        now = _now()
+        if self._shed_cooldown_until and now < self._shed_cooldown_until:
+            return
+        if self._last_shed_at and now - self._last_shed_at < SHED_STEP_DWELL:
+            return
+        already = set(self._shed_ids)
+        for entity_id in self._shed_load_ids():
+            if entity_id in already or not self._is_load_on(entity_id):
+                continue
+            await self._async_set_load(entity_id, False)
+            self._shed_ids.append(entity_id)
+            if self._shed_started_at is None:
+                self._shed_started_at = now
+            self._last_shed_at = now
+            await self._async_save_shed()
+            return
+
+    def _shed_expired(self) -> bool:
+        if not self._shed_ids or self._shed_started_at is None:
+            return False
+        return _now() - self._shed_started_at >= timedelta(
+            minutes=self._shed_max_minutes()
+        )
+
+    async def _async_sync_shed(self, target: float) -> None:
+        """Shed or restore loads for this cycle. Max Power only."""
+        ev_watts = self._measured_ev_watts()
+        if ev_watts == 0:
+            self._zero_ev_cycles += 1
+        else:
+            self._zero_ev_cycles = 0
+
+        if (
+            not self.enabled
+            or not self._car_can_charge()
+            or self.mode != ChargeMode.MAX_SOLAR_GRID
+        ):
+            await self._async_restore_shed(cooldown=False)
+            return
+        if self._shed_expired():
+            await self._async_restore_shed(cooldown=True)
+            return
+        if self._zero_ev_cycles >= SHED_IDLE_CYCLES:
+            await self._async_restore_shed(cooldown=False)
+            return
+        # Shedding for a car that is asleep or ignoring commands frees
+        # nothing it can use.
+        if ev_watts > 0 and self._grid_limited():
+            await self._async_shed_next()
+
+    def _status(
+        self, target: float, available: float, *, enabled: bool
+    ) -> dict[str, Any]:
+        return {
+            "target_amps": round(target),
+            "available_power": round(available, 1),
+            "mode": self.mode,
+            "enabled": enabled,
+            "ev_power": round(self._measured_ev_watts(), 1),
+            "shed_loads": list(self._shed_ids),
+        }
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Run the regulation loop."""
+        await self._async_restore_persisted_shed_once()
+        try:
+            return await self._async_regulate()
+        finally:
+            self._defer_shed = False
+
+    async def _async_regulate(self) -> dict[str, Any]:
+        """One regulation cycle. Caller clears the restart shed deferral."""
         if not self.enabled:
             self._last_target = 0
             await self._async_set_charger_amps(0)
-            return {
-                "target_amps": 0,
-                "available_power": 0,
-                "mode": self.mode,
-                "enabled": False,
-            }
+            await self._async_restore_shed(cooldown=False)
+            return self._status(0, 0, enabled=False)
 
         if not self._car_can_charge():
             await self._async_stop_unchargeable()
-            return {
-                "target_amps": 0,
-                "available_power": 0,
-                "mode": self.mode,
-                "enabled": True,
-            }
+            await self._async_restore_shed(cooldown=False)
+            return self._status(0, 0, enabled=True)
         self._charger_off_sent_at = None
 
         voltage = self._get_voltage()
         power_buffer = float(self._opt(CONF_POWER_BUFFER, DEFAULT_POWER_BUFFER))
-        charger_power = self._measured_charger_power(voltage)
+        charger_power = self._measured_ev_watts()
 
         prioritize_battery = bool(
             self._opt(CONF_PRIORITIZE_BATTERY, DEFAULT_PRIORITIZE_BATTERY)
@@ -534,12 +759,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             if grid_export is None:
                 _LOGGER.debug("Grid export sensor unavailable, skipping cycle")
-                return {
-                    "target_amps": self._last_target,
-                    "available_power": 0,
-                    "mode": self.mode,
-                    "enabled": True,
-                }
+                return self._status(self._last_target, 0, enabled=True)
             if grid_export > 0:
                 self._record_reading(grid_export + charger_power, charger_power)
             else:
@@ -555,12 +775,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.debug(
                     "Solar production sensor unavailable, skipping cycle"
                 )
-                return {
-                    "target_amps": self._last_target,
-                    "available_power": 0,
-                    "mode": self.mode,
-                    "enabled": True,
-                }
+                return self._status(self._last_target, 0, enabled=True)
             house_consumption = self._get_sensor_value(
                 self._entry.data.get(CONF_HOUSE_CONSUMPTION_SENSOR)
             ) or 0
@@ -576,11 +791,11 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
         solar_surplus = self._rolling_average() - power_buffer
-        grid_capacity = self._get_grid_available_amps() * voltage
+        grid_capacity = self._grid_available_power()
 
         # Battery-priority gate: in pure solar modes, hold off charging
         # until the home battery has reached its minimum SOC. Grid-backed
-        # modes (Max Solar+Grid, Valley) are unaffected because the user
+        # modes (Max Power, Valley) are unaffected because the user
         # explicitly opted into pulling from the grid.
         battery_blocks = self._battery_blocks_solar_charge()
 
@@ -630,10 +845,6 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_target = target
 
         await self._async_set_charger_amps(target)
+        await self._async_sync_shed(target)
 
-        return {
-            "target_amps": round(target),
-            "available_power": round(available_power, 1),
-            "mode": self.mode,
-            "enabled": True,
-        }
+        return self._status(target, available_power, enabled=True)

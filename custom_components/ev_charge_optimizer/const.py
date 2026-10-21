@@ -14,6 +14,10 @@ CONF_BATTERY_POWER_SENSOR = "battery_power_sensor"
 CONF_EV_SOC_SENSOR = "ev_soc_sensor"
 CONF_EV_CHARGING_STATE_SENSOR = "ev_charging_state_sensor"
 CONF_EV_CHARGE_LIMIT_ENTITY = "ev_charge_limit_entity"
+CONF_EV_POWER_SENSOR = "ev_power_sensor"
+CONF_BATTERY_POWER_POSITIVE_DISCHARGE = "battery_power_positive_discharge"
+CONF_SHED_LOADS = "shed_loads"
+CONF_SHED_MAX_MINUTES = "shed_max_minutes"
 
 # Config keys - charger
 CONF_CHARGER_NUMBER_ENTITY = "charger_number_entity"
@@ -54,6 +58,9 @@ DEFAULT_PRIORITIZE_BATTERY = False
 DEFAULT_BATTERY_MIN_SOC = 95
 DEFAULT_VALLEY_START = "23:00"
 DEFAULT_VALLEY_END = "07:00"
+DEFAULT_BATTERY_POWER_POSITIVE_DISCHARGE = False
+DEFAULT_SHED_MAX_MINUTES = 120
+DEFAULT_MAX_EV_SOC = 100
 
 
 class ChargeMode(StrEnum):
@@ -67,9 +74,14 @@ class ChargeMode(StrEnum):
 
 MODE_LABELS = {
     ChargeMode.SOLAR_ONLY: "Solar Only",
-    ChargeMode.MAX_SOLAR_GRID: "Max Solar + Grid",
+    ChargeMode.MAX_SOLAR_GRID: "Max Power",
     ChargeMode.VALLEY: "Valley / Off-Peak",
     ChargeMode.MIN_SOLAR_TOPUP: "Min Solar + Grid Top-up",
+}
+
+# Labels used before a rename, so a restored select state still maps to its mode.
+LEGACY_MODE_LABELS = {
+    "Max Solar + Grid": ChargeMode.MAX_SOLAR_GRID,
 }
 
 PLATFORMS = ["sensor", "select", "switch", "number"]
