@@ -115,6 +115,7 @@ SWITCH_OFF_RETRY = timedelta(minutes=5)
 SHED_STEP_DWELL = timedelta(seconds=60)
 SHED_COOLDOWN = timedelta(minutes=30)
 SHED_IDLE_CYCLES = 3
+SPARE_MIN_DISCHARGE_W = 200
 _SHED_STORE_VERSION = 1
 _DRAWING_STATES = frozenset({"charging", "starting"})
 _NOT_CHARGEABLE_STATES = frozenset({"complete", "disconnected"})
@@ -551,7 +552,10 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if pv is None:
             return 0.0
         charge_w, discharge_w = self._battery_flows()
-        if charge_w > 0:
+        # A GoodWe reads 0 W for ~35 s after leaving eco_charge; only a battery
+        # already discharging proves it will follow the EV. In self-use it starts
+        # by itself as soon as import appears, so the climb still begins.
+        if charge_w > 0 or discharge_w < SPARE_MIN_DISCHARGE_W:
             return 0.0
         return battery_spare_watts(
             max_discharge_w=float(
