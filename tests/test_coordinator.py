@@ -71,7 +71,7 @@ FRIDGE = "switch.fridge"
 
 
 def _data(
-    mode: ChargeMode = ChargeMode.SOLAR_ONLY,
+    mode: ChargeMode = ChargeMode.SOLAR,
     *,
     include_car_sensors: bool = True,
 ) -> dict[str, object]:
@@ -113,7 +113,7 @@ def _options() -> dict[str, object]:
 def _coordinator(
     hass: HomeAssistant,
     *,
-    mode: ChargeMode = ChargeMode.SOLAR_ONLY,
+    mode: ChargeMode = ChargeMode.SOLAR,
     include_car_sensors: bool = True,
 ) -> EVChargeOptimizerCoordinator:
     entry = MockConfigEntry(
@@ -308,7 +308,7 @@ async def test_target_stays_zero_when_soc_reaches_charge_limit(
     monkeypatch: object,
 ) -> None:
     services = _services(hass)
-    coordinator = _coordinator(hass, mode=ChargeMode.VALLEY)
+    coordinator = _coordinator(hass, mode=ChargeMode.CHEAP)
     monkeypatch.setattr(
         "custom_components.ev_charge_optimizer.coordinator._now",
         _Clock(datetime(2026, 6, 15, 2, 0, 0)),
@@ -467,7 +467,7 @@ async def test_valley_mode_outside_window_ignores_battery_export(
     monkeypatch: object,
 ) -> None:
     services = _services(hass)
-    coordinator = _coordinator(hass, mode=ChargeMode.VALLEY)
+    coordinator = _coordinator(hass, mode=ChargeMode.CHEAP)
     monkeypatch.setattr(
         "custom_components.ev_charge_optimizer.coordinator._now",
         _Clock(datetime(2026, 10, 12, 18, 16, 0)),
@@ -518,7 +518,7 @@ async def test_grid_headroom_uses_measured_ev_and_battery_discharge(
     hass: HomeAssistant,
 ) -> None:
     services = _services(hass)
-    coordinator = _coordinator(hass, mode=ChargeMode.MAX_SOLAR_GRID)
+    coordinator = _coordinator(hass, mode=ChargeMode.MAX_POWER)
     _set_options(
         coordinator,
         **{
@@ -544,7 +544,7 @@ async def test_ev_may_take_battery_charge_that_is_coming_from_the_grid(
     hass: HomeAssistant,
 ) -> None:
     _services(hass)
-    coordinator = _coordinator(hass, mode=ChargeMode.MAX_SOLAR_GRID)
+    coordinator = _coordinator(hass, mode=ChargeMode.MAX_POWER)
     _set_options(
         coordinator,
         **{
@@ -570,7 +570,7 @@ async def test_battery_charge_above_import_is_not_grid_yieldable(
     hass: HomeAssistant,
 ) -> None:
     _services(hass)
-    coordinator = _coordinator(hass, mode=ChargeMode.MAX_SOLAR_GRID)
+    coordinator = _coordinator(hass, mode=ChargeMode.MAX_POWER)
     _set_options(
         coordinator,
         **{
@@ -592,7 +592,7 @@ async def test_battery_charge_above_import_is_not_grid_yieldable(
 async def test_missing_power_sensors_count_setpoint_only_while_drawing(
     hass: HomeAssistant,
 ) -> None:
-    entry_data = _data(ChargeMode.MAX_SOLAR_GRID)
+    entry_data = _data(ChargeMode.MAX_POWER)
     entry_data.pop(CONF_BATTERY_POWER_SENSOR)
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -613,23 +613,24 @@ async def test_missing_power_sensors_count_setpoint_only_while_drawing(
     assert idle < 32
 
 
-async def test_ev_power_is_published_when_disabled_or_not_charging(
+async def test_ev_power_is_published_when_off_or_not_charging(
     hass: HomeAssistant,
 ) -> None:
     _services(hass)
-    coordinator = _coordinator(hass, mode=ChargeMode.SOLAR_ONLY)
+    coordinator = _coordinator(hass, mode=ChargeMode.OFF)
     _set_options(coordinator, **{CONF_EV_POWER_SENSOR: EV_POWER})
     _charging_grid(hass, **{PV: 0, GRID: 0, SWITCH: "off", CHARGING: "Stopped"})
     hass.states.async_set(EV_POWER, "0", {"unit_of_measurement": "kW"})
-    coordinator.enabled = False
 
     disabled = await coordinator._async_update_data()
 
-    assert disabled["enabled"] is False
+    assert "enabled" not in disabled
+    assert disabled["target_amps"] == 0
+    assert disabled["status"] == "Off"
     assert disabled["ev_power"] == 0
     assert disabled["shed_loads"] == []
 
-    coordinator.enabled = True
+    coordinator.mode = ChargeMode.SOLAR
     _set(hass, **{CHARGING: "Complete", SWITCH: "on", EV_SOC: 80, LIMIT: 90})
     stopped = await coordinator._async_update_data()
     assert stopped["target_amps"] == 0
@@ -640,7 +641,7 @@ async def test_max_ev_soc_stops_below_the_car_charge_limit(
     hass: HomeAssistant,
 ) -> None:
     services = _services(hass)
-    coordinator = _coordinator(hass, mode=ChargeMode.MAX_SOLAR_GRID)
+    coordinator = _coordinator(hass, mode=ChargeMode.MAX_POWER)
     coordinator.max_ev_soc = 30
     _set_options(coordinator, **{CONF_GRID_MAX_POWER: 5500})
     _charging_grid(hass, **{GRID: 0, EV_SOC: 30, LIMIT: 50, SWITCH: "on", AMPS: 10})
@@ -656,7 +657,7 @@ async def test_car_limit_still_allows_charge_when_slider_is_higher(
     hass: HomeAssistant,
 ) -> None:
     services = _services(hass)
-    coordinator = _coordinator(hass, mode=ChargeMode.MAX_SOLAR_GRID)
+    coordinator = _coordinator(hass, mode=ChargeMode.MAX_POWER)
     coordinator.max_ev_soc = 100
     _set_options(coordinator, **{CONF_GRID_MAX_POWER: 5500})
     _charging_grid(hass, **{GRID: 0, EV_SOC: 40, LIMIT: 50, SWITCH: "on", AMPS: 6})
@@ -673,7 +674,7 @@ def _shed_coordinator(
     *,
     max_minutes: int = 120,
 ) -> EVChargeOptimizerCoordinator:
-    coordinator = _coordinator(hass, mode=ChargeMode.MAX_SOLAR_GRID)
+    coordinator = _coordinator(hass, mode=ChargeMode.MAX_POWER)
     _set_options(
         coordinator,
         **{
@@ -733,7 +734,7 @@ async def test_leaving_max_mode_restores_only_shed_loads(
     shed = await coordinator._async_update_data()
     assert shed["shed_loads"] == [SHED_A]
 
-    coordinator.mode = ChargeMode.SOLAR_ONLY
+    coordinator.mode = ChargeMode.SOLAR
     _set(hass, **{PV: 0, GRID: 0, SHED_A: "off"})
     restored = await coordinator._async_update_data()
 
@@ -798,7 +799,7 @@ async def test_restart_turns_persisted_shed_loads_back_on(
 async def test_stale_ev_sensor_above_setpoint_does_not_invent_headroom(
     hass: HomeAssistant,
 ) -> None:
-    coordinator = _coordinator(hass, mode=ChargeMode.MAX_SOLAR_GRID)
+    coordinator = _coordinator(hass, mode=ChargeMode.MAX_POWER)
     _set_options(
         coordinator,
         **{CONF_GRID_MAX_POWER: 5500, CONF_EV_POWER_SENSOR: EV_POWER},
@@ -849,7 +850,7 @@ async def test_shed_loads_return_after_three_idle_cycles_even_with_a_target(
     assert restored["shed_loads"] == []
 
 
-async def test_mode_and_enabled_survive_a_restart(hass: HomeAssistant) -> None:
+async def test_old_valley_label_restores_as_cheap(hass: HomeAssistant) -> None:
     _services(hass)
     mock_restore_cache(
         hass,
@@ -859,7 +860,7 @@ async def test_mode_and_enabled_survive_a_restart(hass: HomeAssistant) -> None:
         ],
     )
     entry = MockConfigEntry(
-        domain=DOMAIN, data=_data(ChargeMode.SOLAR_ONLY), options=_options()
+        domain=DOMAIN, data=_data(ChargeMode.SOLAR), options=_options()
     )
     entry.add_to_hass(hass)
     _charging_grid(hass)
@@ -868,11 +869,10 @@ async def test_mode_and_enabled_survive_a_restart(hass: HomeAssistant) -> None:
     await hass.async_block_till_done()
 
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    assert coordinator.mode == ChargeMode.VALLEY
-    assert coordinator.enabled is False
-    assert hass.states.get("select.ev_charge_optimizer_charging_mode").state == (
-        "Valley / Off-Peak"
-    )
+    assert coordinator.mode == ChargeMode.CHEAP
+    assert not hasattr(coordinator, "enabled")
+    assert hass.states.get("select.ev_charge_optimizer_charging_mode").state == "Cheap"
+    assert hass.states.get("switch.ev_charge_optimizer_enabled") is None
 
 
 async def test_max_mode_is_labelled_max_power_and_old_label_still_restores(
@@ -883,7 +883,7 @@ async def test_max_mode_is_labelled_max_power_and_old_label_still_restores(
         hass, [State("select.ev_charge_optimizer_charging_mode", "Max Solar + Grid")]
     )
     entry = MockConfigEntry(
-        domain=DOMAIN, data=_data(ChargeMode.SOLAR_ONLY), options=_options()
+        domain=DOMAIN, data=_data(ChargeMode.SOLAR), options=_options()
     )
     entry.add_to_hass(hass)
     _charging_grid(hass)
@@ -892,7 +892,7 @@ async def test_max_mode_is_labelled_max_power_and_old_label_still_restores(
     await hass.async_block_till_done()
 
     coordinator = hass.data[DOMAIN][entry.entry_id]
-    assert coordinator.mode == ChargeMode.MAX_SOLAR_GRID
+    assert coordinator.mode == ChargeMode.MAX_POWER
     state = hass.states.get("select.ev_charge_optimizer_charging_mode")
     assert state.state == "Max Power"
     assert "Max Solar + Grid" not in state.attributes["options"]

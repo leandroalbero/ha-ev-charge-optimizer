@@ -6,10 +6,12 @@ A Home Assistant integration that optimizes EV charger power based on available 
 
 ## Features
 
-- **Solar Only** — Charge exclusively from surplus solar power. Ramps amps up/down based on export, stops when insufficient.
-- **Max Power** (formerly Max Solar + Grid) — Charge at maximum amps the grid cap allows, plus solar.
-- **Valley / Off-Peak** — Schedule charging at a fixed rate during configurable off-peak hours. Reverts to Solar Only outside the window.
-- **Min Solar + Grid Top-up** — Use solar surplus when available, with a guaranteed minimum charge rate from the grid.
+- **Off** — Target 0. The charger switch is turned off (no wake, no amp writes) and any shed loads are restored.
+- **Solar** — Charge from surplus solar only. Optional Solar Floor Amps (0–16 A) raises the target to `min(max(solar, floor), grid headroom)`. Floor 0 is pure solar. Home-battery minimum SOC still gates this mode.
+- **Cheap** — During the valley window, or all weekend when "weekends are valley" is on, charge at Valley Amps capped by grid headroom. Outside that, surplus solar only (no floor).
+- **Ready By** — Finish the Maximum EV Charge slider by a clock time, buying the cheapest hours first (valley, then shoulder, then peak). Solar surplus is used in the other hours. See below.
+- **Max Power** — Charge at the maximum amps the grid cap allows, plus inverter supply when battery assist is configured. Load shedding stays in this mode and in Boost.
+- **Boost** — Same as Max Power, but the grid cap is a current above the contract for a bounded budget. See below. The only risk on 2.0TD is a trip; there is no excess-power penalty.
 
 ### Regulation Algorithm
 
@@ -61,21 +63,55 @@ After setup, configure advanced parameters via the integration's options:
 | Power Buffer | 100W | Hysteresis to prevent amp toggling at the boundary |
 | Rolling Average Window | 5 | Number of readings to average before adjusting |
 | Max Step Change | 2A | Maximum amp change per regulation cycle |
-| Valley Start/End | 23:00–07:00 | Off-peak time window for Valley mode |
-| Valley Amps | 16A | Charging rate during Valley hours |
-| Guaranteed Min Amps | 8A | Minimum amps for Min Solar + Grid Top-up mode |
+| Valley Start/End | 23:00–07:00 | Off-peak window for Cheap, and the valley price class for Ready By |
+| Valley Amps | 16A | Charging rate during Cheap valley hours |
+| Weekends are valley | on | Saturday and Sunday count as valley for Cheap and Ready By |
+| EV battery size | 60 kWh | Used by Ready By to turn a SOC gap into kWh |
+| Peak hours | 10-14,18-22 | Local hour ranges `[start, end)` that Ready By treats as peak |
+| Solar forecast today/tomorrow | — | Optional Solcast sensors. `detailedHourly` credits expected surplus before the deadline |
 | EV Charging State Sensor | — | Optional. Car's charging state (e.g. `Charging`, `Complete`, `Disconnected`). Stops regulation when the car is full or unplugged, and stops counting the amp setpoint as draw while the car is idle |
 | EV Charge Limit Entity | — | Optional. Car's charge limit (%). With the EV SoC sensor, charging stops once SoC reaches it |
 | EV Power Sensor | — | Optional. Actual EV draw (`kW` or `W`). Grid headroom uses this instead of the amp setpoint. Without it, the setpoint counts only while the car is drawing |
 | Battery power positive when discharging | off | Optional. Enable for inverters whose battery power is positive while discharging (e.g. GoodWe). Default keeps positive = charging |
 | Loads to shed | — | Optional, Max Power only. Ordered switches, lights, or input booleans turned off one at a time while the grid cap is binding. Only loads this integration turned off are restored |
 | Max shed minutes | 120 | Longest a shed load stays off. After that, loads come back on and shedding waits 30 minutes |
+| Battery max discharge | 0 W | Extra discharge Max Power and Boost may count as supply. 0 turns the credit off |
+| Inverter AC max | 0 W | Combined PV + battery AC limit of the inverter. 0 turns the credit off |
+| Battery reserve SOC | 10% | No inverter credit at or below this home-battery SOC |
+| Boost factor | 1.08 | Allowed import current as a multiple of In (contract W / 230 V) |
+| Boost budget | 50 min | Minutes of import current above In before Boost falls back to the contract |
+| Boost cool-down | 60 min | Rest after the budget is used, during which Boost uses the contract cap |
 
 When the car cannot charge (full, unplugged, at its charge limit, or at the Maximum EV Charge slider) the charger switch is turned off (retried at most every 5 minutes), amps are not written and the car is not woken. The wake button is pressed at most once every 15 minutes. Surplus never exceeds solar production minus household load, so home-battery discharge exported for a few seconds is not mistaken for solar.
 
-In Max Power, Valley, and Min top-up, grid headroom is `grid cap − live import − battery discharge + battery charge taken from the grid + measured EV draw`. A home battery discharging into the house is not treated as spare grid capacity, and a charger setpoint the car is not actually pulling is not treated as draw. Battery charge is yieldable only up to live import, so the EV can take grid power that was charging the home battery, but not solar that was.
+In Cheap and Ready By (while a chosen slot is active), grid headroom is `grid cap − live import − battery discharge + battery charge taken from the grid + measured EV draw`. A home battery discharging into the house is not treated as spare grid capacity, and a charger setpoint the car is not actually pulling is not treated as draw. Battery charge is yieldable only up to live import, so the EV can take grid power that was charging the home battery, but not solar that was.
 
-In Max Power only, while that headroom is below max amps, the optimizer can turn off the next still-on load in the shed list (at most one per minute). Those loads are turned back on when the mode changes, the optimizer is disabled, the car cannot charge, the EV draws nothing for three cycles, the shed reaches its max minutes, or Home Assistant restarts. A shed that hits the time limit is not repeated for 30 minutes.
+### Max Power supply
+
+Max Power is capped at the grid contract plus whatever the inverter can still supply, not at a fixed 5.5 kW. With `battery_max_discharge_w` and `inverter_ac_max_w` both 0 the feature is off and Max Power keeps the headroom above. Once both are set, and home-battery SoC is above `battery_reserve_soc` (default 10%), headroom is `grid cap − live import + measured EV + battery spare`. Spare is `max(0, min(battery max discharge, inverter AC max − PV) − battery discharge already underway)`. If live import stays above the active cap for two cycles, spare is suspended for 5 minutes. The grid cap remains the hard limit.
+
+### Boost
+
+Boost behaves like Max Power (inverter supply, shedding, Battery Assist on) but the grid cap is current-based. The smart meter's integrated ICP follows the ICP-M curve in UNE 20317:2015:
+
+- Int = 1.1·In: no trip for 1 hour from cold
+- It ≈ 1.55·In: trip in under 900 s
+- 2.475·In: trip in 1–60 s
+- 5·In: instant
+
+In = contract W / 230 V (5500 W → 23.9 A). Allowed import current while the budget lasts is `boost_factor` × In (default 1.08), converted to watts with the live mains voltage. Seconds with import current above In are counted in a rolling 2 hour window and kept across restarts. After `boost_max_minutes` (default 50) the cap falls back to the plain contract and cools down for `boost_cooldown_minutes` (default 60). Any cycle above 1.10·In drops to the contract cap for that cycle and the next 60 seconds. Status reports `Boost: +1.9 A over contract, 40 min left`, `Boost: cooling down, 41 min`, or `Boost: over 1.1×In, backing off`.
+
+In Max Power and Boost, while that headroom is below max amps, the optimizer can turn off the next still-on load in the shed list (at most one per minute). Those loads are turned back on when the mode changes, the mode is Off, the car cannot charge, the EV draws nothing for three cycles, the shed reaches its max minutes, or Home Assistant restarts. A shed that hits the time limit is not repeated for 30 minutes.
+
+### Ready By
+
+Set the Ready By time (default 07:30) and the Maximum EV Charge slider. Each cycle the integration computes the energy still needed:
+
+`need_kWh = max(0, (target − SOC) / 100 × battery_kWh) / 0.9`
+
+If SOC is missing it behaves like Cheap. If need is already 0 it stays on solar surplus. Otherwise it builds hourly slots from now until the next occurrence of the Ready By time (tomorrow if that time has passed), prices each hour valley < shoulder < peak, and takes the cheapest hours until they cover the need. A Solcast `detailedHourly` forecast, if configured, reduces that need by the expected surplus (70% of `pv_estimate − house load`, capped at the charger). If even every hour is not enough, it charges in all of them and the Status sensor reports the shortfall.
+
+The charger runs at full grid-headroom amps only while the current hour was chosen. Every other hour is solar surplus. The plan is recomputed every cycle, so charging stops on its own once the need is met.
 
 ## Entities
 
@@ -83,8 +119,11 @@ The integration creates the following entities:
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| Charging Mode | Select | Choose between Solar Only, Max Power, Valley, Min Solar + Grid Top-up |
-| Enabled | Switch | Master on/off for the optimizer |
+| Charging Mode | Select | Off, Solar, Cheap, Ready By, Max Power, or Boost |
+| Battery Assist | Binary sensor | On while Max Power or Boost is selected and the car can charge. Point the MPC `deferrable_allow_battery_entity_id` at `binary_sensor.ev_charge_optimizer_battery_assist` |
+| Status | Sensor | One line for the active mode. Ready By also exposes deadline, need, chosen slots, shortfall, and projected SOC |
+| Ready By | Time | Deadline for Ready By. Restored. Default 07:30 |
+| Solar Floor Amps | Number | 0–16 A floor for Solar. 0 is pure solar. Restored |
 | Target Amps | Sensor | Current amperage target being sent to the charger |
 | Available Power | Sensor | Calculated surplus power available for charging (W). In grid modes this is contract headroom, capped at max amps |
 | EV Power | Sensor | Measured EV draw (W), updated every cycle, including 0 when not charging |

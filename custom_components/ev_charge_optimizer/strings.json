@@ -10,7 +10,7 @@
           "house_consumption_sensor": "House Consumption Sensor",
           "battery_soc_sensor": "Home Battery SOC Sensor (optional)",
           "battery_power_sensor": "Home Battery Power Sensor (optional, +charging/-discharging)",
-          "ev_soc_sensor": "EV Battery SOC Sensor (optional, used by Valley target SOC)",
+          "ev_soc_sensor": "EV Battery SOC Sensor (optional, used by Ready By)",
           "ev_charging_state_sensor": "EV Charging State Sensor (optional)",
           "ev_charge_limit_entity": "EV Charge Limit (optional, number or sensor)",
           "ev_power_sensor": "EV Power Sensor (optional, actual draw)",
@@ -45,7 +45,7 @@
           "house_consumption_sensor": "House Consumption Sensor",
           "battery_soc_sensor": "Home Battery SOC Sensor (optional)",
           "battery_power_sensor": "Home Battery Power Sensor (optional, +charging/-discharging)",
-          "ev_soc_sensor": "EV Battery SOC Sensor (optional, used by Valley target SOC)",
+          "ev_soc_sensor": "EV Battery SOC Sensor (optional, used by Ready By)",
           "ev_charging_state_sensor": "EV Charging State Sensor (optional)",
           "ev_charge_limit_entity": "EV Charge Limit (optional, number or sensor)",
           "ev_power_sensor": "EV Power Sensor (optional, actual draw)",
@@ -60,6 +60,12 @@
           "min_amps": "Minimum Amps",
           "max_amps": "Maximum Amps",
           "grid_max_power": "Grid Max Power (W)",
+          "battery_max_discharge_w": "Battery max discharge (W, 0 = off)",
+          "inverter_ac_max_w": "Inverter AC max (W, 0 = no inverter credit)",
+          "battery_reserve_soc": "Battery reserve SOC before Max Power assist (%)",
+          "boost_factor": "Boost factor (× contract current)",
+          "boost_max_minutes": "Boost budget (minutes above contract current)",
+          "boost_cooldown_minutes": "Boost cool-down (minutes)",
           "default_mode": "Default Charging Mode"
         }
       },
@@ -70,6 +76,12 @@
           "min_amps": "Minimum Amps",
           "max_amps": "Maximum Amps",
           "grid_max_power": "Grid Max Power (W)",
+          "battery_max_discharge_w": "Battery max discharge (W, 0 = off)",
+          "inverter_ac_max_w": "Inverter AC max (W, 0 = no inverter credit)",
+          "battery_reserve_soc": "Battery reserve SOC before Max Power assist (%)",
+          "boost_factor": "Boost factor (× contract current)",
+          "boost_max_minutes": "Boost budget (minutes above contract current)",
+          "boost_cooldown_minutes": "Boost cool-down (minutes)",
           "default_mode": "Default Charging Mode"
         }
       }
@@ -85,23 +97,32 @@
         "description": "Adjust the regulation algorithm and mode-specific settings.",
         "data": {
           "prioritize_battery": "Prioritize home battery (only charge EV from grid export surplus)",
-          "battery_min_soc": "Battery min SOC before EV may charge (Solar Only / Top-up modes)",
+          "battery_min_soc": "Battery min SOC before EV may charge from solar surplus",
           "update_interval": "Update Interval",
           "power_buffer": "Power Buffer (hysteresis)",
           "rolling_window": "Rolling Average Window",
           "max_step": "Max Amps Change Per Cycle",
           "valley_start": "Valley Start Time",
           "valley_end": "Valley End Time",
-          "valley_amps": "Valley Charging Amps",
-          "valley_target_soc": "Valley Target SOC (stop charging at this EV %)",
-          "guaranteed_min_amps": "Guaranteed Min Amps (Top-up mode)",
+          "valley_amps": "Cheap valley charging amps",
+          "ev_battery_kwh": "EV battery size (kWh)",
+          "peak_hours": "Peak hours (e.g. 10-14,18-22)",
+          "weekends_valley": "Treat Saturday and Sunday as valley",
+          "solar_forecast_today_entity": "Solar forecast today (optional, Solcast)",
+          "solar_forecast_tomorrow_entity": "Solar forecast tomorrow (optional, Solcast)",
           "grid_max_power": "Grid Max Power (W)",
           "ev_charging_state_sensor": "EV Charging State Sensor (optional)",
           "ev_charge_limit_entity": "EV Charge Limit (optional, number or sensor)",
           "ev_power_sensor": "EV Power Sensor (optional, actual draw)",
           "battery_power_positive_discharge": "Battery power is positive when discharging",
           "shed_loads": "Loads to shed when the grid cap is binding (optional)",
-          "shed_max_minutes": "Max minutes a shed load stays off"
+          "shed_max_minutes": "Max minutes a shed load stays off",
+          "battery_max_discharge_w": "Battery max discharge (W, 0 = off)",
+          "inverter_ac_max_w": "Inverter AC max (W, 0 = no inverter credit)",
+          "battery_reserve_soc": "Battery reserve SOC before Max Power assist (%)",
+          "boost_factor": "Boost factor (× contract current)",
+          "boost_max_minutes": "Boost budget (minutes above contract current)",
+          "boost_cooldown_minutes": "Boost cool-down (minutes)"
         }
       }
     }

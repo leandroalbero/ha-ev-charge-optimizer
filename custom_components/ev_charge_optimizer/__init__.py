@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
@@ -18,6 +19,7 @@ from .coordinator import EVChargeOptimizerCoordinator
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up EV Charge Optimizer from a config entry."""
+    _async_remove_legacy_enabled(hass, entry)
     coordinator = EVChargeOptimizerCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 
@@ -53,6 +55,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     return True
+
+
+def _async_remove_legacy_enabled(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(
+        "switch", DOMAIN, f"{entry.entry_id}_enabled"
+    )
+    if entity_id is not None:
+        registry.async_remove(entity_id)
 
 
 async def _async_update_listener(

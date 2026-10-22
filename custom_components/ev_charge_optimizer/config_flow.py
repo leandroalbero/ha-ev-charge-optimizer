@@ -17,49 +17,66 @@ from homeassistant.helpers.selector import (
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
+    TextSelector,
     TimeSelector,
 )
 
 from .const import (
+    CONF_BATTERY_MAX_DISCHARGE_W,
     CONF_BATTERY_MIN_SOC,
     CONF_BATTERY_POWER_POSITIVE_DISCHARGE,
     CONF_BATTERY_POWER_SENSOR,
+    CONF_BATTERY_RESERVE_SOC,
     CONF_BATTERY_SOC_SENSOR,
+    CONF_BOOST_COOLDOWN_MINUTES,
+    CONF_BOOST_FACTOR,
+    CONF_BOOST_MAX_MINUTES,
     CONF_CHARGER_NUMBER_ENTITY,
     CONF_CHARGER_SWITCH_ENTITY,
     CONF_CHARGER_WAKE_ENTITY,
     CONF_DEFAULT_MODE,
+    CONF_EV_BATTERY_KWH,
     CONF_EV_CHARGE_LIMIT_ENTITY,
     CONF_EV_CHARGING_STATE_SENSOR,
     CONF_EV_POWER_SENSOR,
     CONF_EV_SOC_SENSOR,
     CONF_GRID_EXPORT_SENSOR,
     CONF_GRID_MAX_POWER,
-    CONF_GUARANTEED_MIN_AMPS,
     CONF_HOUSE_CONSUMPTION_SENSOR,
+    CONF_INVERTER_AC_MAX_W,
     CONF_MAX_AMPS,
     CONF_MAX_STEP,
     CONF_MIN_AMPS,
+    CONF_PEAK_HOURS,
     CONF_POWER_BUFFER,
     CONF_PRIORITIZE_BATTERY,
     CONF_ROLLING_WINDOW,
     CONF_SHED_LOADS,
     CONF_SHED_MAX_MINUTES,
+    CONF_SOLAR_FORECAST_TODAY,
+    CONF_SOLAR_FORECAST_TOMORROW,
     CONF_SOLAR_PRODUCTION_SENSOR,
     CONF_STATIC_VOLTAGE,
     CONF_UPDATE_INTERVAL,
     CONF_VALLEY_AMPS,
     CONF_VALLEY_END,
     CONF_VALLEY_START,
-    CONF_VALLEY_TARGET_SOC,
     CONF_VOLTAGE_SENSOR,
+    CONF_WEEKENDS_VALLEY,
+    DEFAULT_BATTERY_MAX_DISCHARGE_W,
     DEFAULT_BATTERY_MIN_SOC,
     DEFAULT_BATTERY_POWER_POSITIVE_DISCHARGE,
+    DEFAULT_BATTERY_RESERVE_SOC,
+    DEFAULT_BOOST_COOLDOWN_MINUTES,
+    DEFAULT_BOOST_FACTOR,
+    DEFAULT_BOOST_MAX_MINUTES,
+    DEFAULT_EV_BATTERY_KWH,
     DEFAULT_GRID_MAX_POWER,
-    DEFAULT_GUARANTEED_MIN_AMPS,
+    DEFAULT_INVERTER_AC_MAX_W,
     DEFAULT_MAX_AMPS,
     DEFAULT_MAX_STEP,
     DEFAULT_MIN_AMPS,
+    DEFAULT_PEAK_HOURS,
     DEFAULT_POWER_BUFFER,
     DEFAULT_PRIORITIZE_BATTERY,
     DEFAULT_ROLLING_WINDOW,
@@ -69,13 +86,95 @@ from .const import (
     DEFAULT_VALLEY_AMPS,
     DEFAULT_VALLEY_END,
     DEFAULT_VALLEY_START,
-    DEFAULT_VALLEY_TARGET_SOC,
+    DEFAULT_WEEKENDS_VALLEY,
     DOMAIN,
     MODE_LABELS,
     ChargeMode,
+    coerce_mode,
 )
 
 CONF_DEFAULT_MODE = "default_mode"
+
+
+def _watts_box() -> NumberSelector:
+    return NumberSelector(
+        NumberSelectorConfig(
+            min=0,
+            max=20000,
+            step=50,
+            unit_of_measurement="W",
+            mode=NumberSelectorMode.BOX,
+        )
+    )
+
+
+def _supply_schema(current: dict[str, Any]) -> dict:
+    """Max Power assist and Boost fields shared by config and options."""
+
+    def default(key: str, fallback: float) -> float:
+        return current.get(key, fallback)
+
+    return {
+        vol.Optional(
+            CONF_BATTERY_MAX_DISCHARGE_W,
+            default=default(
+                CONF_BATTERY_MAX_DISCHARGE_W, DEFAULT_BATTERY_MAX_DISCHARGE_W
+            ),
+        ): _watts_box(),
+        vol.Optional(
+            CONF_INVERTER_AC_MAX_W,
+            default=default(CONF_INVERTER_AC_MAX_W, DEFAULT_INVERTER_AC_MAX_W),
+        ): _watts_box(),
+        vol.Optional(
+            CONF_BATTERY_RESERVE_SOC,
+            default=default(CONF_BATTERY_RESERVE_SOC, DEFAULT_BATTERY_RESERVE_SOC),
+        ): NumberSelector(
+            NumberSelectorConfig(
+                min=0,
+                max=100,
+                step=1,
+                unit_of_measurement="%",
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Optional(
+            CONF_BOOST_FACTOR,
+            default=default(CONF_BOOST_FACTOR, DEFAULT_BOOST_FACTOR),
+        ): NumberSelector(
+            NumberSelectorConfig(
+                min=1,
+                max=1.1,
+                step=0.01,
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Optional(
+            CONF_BOOST_MAX_MINUTES,
+            default=default(CONF_BOOST_MAX_MINUTES, DEFAULT_BOOST_MAX_MINUTES),
+        ): NumberSelector(
+            NumberSelectorConfig(
+                min=1,
+                max=60,
+                step=1,
+                unit_of_measurement="min",
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Optional(
+            CONF_BOOST_COOLDOWN_MINUTES,
+            default=default(
+                CONF_BOOST_COOLDOWN_MINUTES, DEFAULT_BOOST_COOLDOWN_MINUTES
+            ),
+        ): NumberSelector(
+            NumberSelectorConfig(
+                min=1,
+                max=240,
+                step=1,
+                unit_of_measurement="min",
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+    }
 
 
 class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -245,9 +344,10 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                             mode=NumberSelectorMode.BOX,
                         )
                     ),
+                    **_supply_schema({}),
                     vol.Optional(
                         CONF_DEFAULT_MODE,
-                        default=ChargeMode.SOLAR_ONLY,
+                        default=ChargeMode.SOLAR,
                     ): SelectSelector(
                         SelectSelectorConfig(
                             options=[
@@ -440,11 +540,12 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                             mode=NumberSelectorMode.BOX,
                         )
                     ),
+                    **_supply_schema(current),
                     vol.Optional(
                         CONF_DEFAULT_MODE,
-                        default=current.get(
-                            CONF_DEFAULT_MODE, ChargeMode.SOLAR_ONLY
-                        ),
+                        default=coerce_mode(
+                            current.get(CONF_DEFAULT_MODE, ChargeMode.SOLAR)
+                        ).value,
                     ): SelectSelector(
                         SelectSelectorConfig(
                             options=[
@@ -583,33 +684,43 @@ class EVChargeOptimizerOptionsFlow(OptionsFlow):
                         )
                     ),
                     vol.Optional(
-                        CONF_VALLEY_TARGET_SOC,
+                        CONF_EV_BATTERY_KWH,
                         default=current.get(
-                            CONF_VALLEY_TARGET_SOC, DEFAULT_VALLEY_TARGET_SOC
-                        ),
-                    ): NumberSelector(
-                        NumberSelectorConfig(
-                            min=0,
-                            max=100,
-                            step=1,
-                            unit_of_measurement="%",
-                            mode=NumberSelectorMode.SLIDER,
-                        )
-                    ),
-                    vol.Optional(
-                        CONF_GUARANTEED_MIN_AMPS,
-                        default=current.get(
-                            CONF_GUARANTEED_MIN_AMPS, DEFAULT_GUARANTEED_MIN_AMPS
+                            CONF_EV_BATTERY_KWH, DEFAULT_EV_BATTERY_KWH
                         ),
                     ): NumberSelector(
                         NumberSelectorConfig(
                             min=1,
-                            max=48,
-                            step=1,
-                            unit_of_measurement="A",
+                            max=200,
+                            step=0.1,
+                            unit_of_measurement="kWh",
                             mode=NumberSelectorMode.BOX,
                         )
                     ),
+                    vol.Optional(
+                        CONF_PEAK_HOURS,
+                        default=current.get(CONF_PEAK_HOURS, DEFAULT_PEAK_HOURS),
+                    ): TextSelector(),
+                    vol.Optional(
+                        CONF_WEEKENDS_VALLEY,
+                        default=current.get(
+                            CONF_WEEKENDS_VALLEY, DEFAULT_WEEKENDS_VALLEY
+                        ),
+                    ): BooleanSelector(),
+                    vol.Optional(
+                        CONF_SOLAR_FORECAST_TODAY,
+                        description={
+                            "suggested_value": current.get(CONF_SOLAR_FORECAST_TODAY)
+                        },
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    vol.Optional(
+                        CONF_SOLAR_FORECAST_TOMORROW,
+                        description={
+                            "suggested_value": current.get(
+                                CONF_SOLAR_FORECAST_TOMORROW
+                            )
+                        },
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
                     vol.Optional(
                         CONF_GRID_MAX_POWER,
                         default=current.get(
@@ -680,6 +791,7 @@ class EVChargeOptimizerOptionsFlow(OptionsFlow):
                             mode=NumberSelectorMode.BOX,
                         )
                     ),
+                    **_supply_schema(current),
                 }
             ),
         )
