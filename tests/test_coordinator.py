@@ -947,3 +947,25 @@ async def test_leaving_max_mode_retries_an_unavailable_shed_load(
     _set(hass, **{FRIDGE: "off"})
     await coordinator._async_update_data()
     assert len(_calls(services.turn_on, FRIDGE)) == 1
+
+
+async def test_cheap_mode_leaves_battery_grid_charging_alone(
+    hass: HomeAssistant,
+) -> None:
+    _services(hass)
+    coordinator = _coordinator(hass, mode=ChargeMode.CHEAP)
+    _set_options(
+        coordinator,
+        **{
+            CONF_GRID_MAX_POWER: 5500,
+            CONF_BATTERY_POWER_POSITIVE_DISCHARGE: True,
+            CONF_EV_POWER_SENSOR: EV_POWER,
+        },
+    )
+    _charging_grid(
+        hass,
+        **{GRID: -3500, BATTERY_POWER: -3000, SWITCH: "off", AMPS: 32, CHARGING: "Stopped"},
+    )
+    hass.states.async_set(EV_POWER, "0", {"unit_of_measurement": "W"})
+
+    assert coordinator._grid_headroom_watts() == pytest.approx(2000, abs=1)

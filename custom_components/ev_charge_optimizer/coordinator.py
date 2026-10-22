@@ -456,14 +456,18 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._opt(CONF_GRID_MAX_POWER, DEFAULT_GRID_MAX_POWER)
         )
         measured = self._measured_ev_watts()
+        car_first = self.mode in (ChargeMode.MAX_POWER, ChargeMode.BOOST)
+        # Outside the car-first modes the home battery keeps its grid charge;
+        # the battery MPC sizes that charge as if the EV weren't there.
+        yieldable = charge_from_grid if car_first else 0.0
         classic = (
             grid_max_power
             - live_import
             - discharge_w
-            + charge_from_grid
+            + yieldable
             + measured
         )
-        if self.mode not in (ChargeMode.MAX_POWER, ChargeMode.BOOST):
+        if not car_first:
             return max(0.0, classic)
         now = _now()
         cap = self._active_cap_watts(now)
