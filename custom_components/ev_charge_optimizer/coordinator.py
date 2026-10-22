@@ -601,7 +601,9 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                 )
                 self._boost_cooldown_until = now + timedelta(minutes=minutes)
-        if live_import > self._active_cap_watts(now):
+        # Only an overshoot while battery spare is credited says the battery
+        # didn't deliver; a house spike during a grid-only start is not that.
+        if live_import > self._active_cap_watts(now) and self._battery_spare_watts() > 0:
             self._assist_over_cycles += 1
         else:
             self._assist_over_cycles = 0

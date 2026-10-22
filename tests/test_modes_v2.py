@@ -1245,3 +1245,23 @@ async def test_max_power_ramps_up_by_max_step_and_starts_on_grid_only(
     _set(hass, **{GRID: -9000})
     dropped = await coordinator._async_update_data()
     assert dropped["target_amps"] < second["target_amps"] - 2
+
+
+async def test_overshoot_without_spare_in_use_does_not_suspend_assist(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _freeze(monkeypatch, datetime(2026, 10, 22, 12, 0))
+    coordinator = _coordinator(hass, ChargeMode.MAX_POWER, **_assist())
+    _idle_power(
+        hass, **{GRID: -5900, BATTERY_POWER: 800, SWITCH: "on", AMPS: 20, CHARGING: "Charging"}
+    )
+    _services(hass)
+
+    await coordinator._async_update_data()
+    clock.moment += timedelta(seconds=10)
+    await coordinator._async_update_data()
+
+    _set(hass, **{GRID: -1000, BATTERY_POWER: -1000})
+    clock.moment += timedelta(seconds=10)
+    assert coordinator._battery_spare_watts() == pytest.approx(3600)
