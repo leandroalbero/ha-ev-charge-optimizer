@@ -1072,6 +1072,8 @@ async def test_boost_hard_guard_backs_off_for_sixty_seconds(
         },
     )
     _idle_power(hass, **{VOLTAGE: 230, BATTERY_POWER: 0, GRID: -6100})
+    first = await coordinator._async_update_data()
+    assert first["status"].startswith("Boost: +")
     breached = await coordinator._async_update_data()
     assert breached["status"] == "Boost: over 1.1×In, backing off"
 
@@ -1282,3 +1284,36 @@ async def test_no_battery_spare_until_the_battery_is_actually_discharging(
 
     _set(hass, **{BATTERY_POWER: -1000})
     assert coordinator._battery_spare_watts() == pytest.approx(3600)
+
+
+async def test_boost_single_spike_over_1_1_in_does_not_back_off(
+    hass: HomeAssistant,
+) -> None:
+    _services(hass)
+    coordinator = _coordinator(
+        hass, ChargeMode.BOOST, **{CONF_GRID_MAX_POWER: 5500, CONF_STATIC_VOLTAGE: 230}
+    )
+    _idle_power(hass, **{VOLTAGE: 230, BATTERY_POWER: 0, GRID: -6100})
+    await coordinator._async_update_data()
+    _set(hass, **{GRID: -5600})
+    after = await coordinator._async_update_data()
+    assert after["status"].startswith("Boost: +")
+
+
+async def test_grid_capped_modes_round_amps_down(
+    hass: HomeAssistant,
+) -> None:
+    _services(hass)
+    coordinator = _coordinator(
+        hass, ChargeMode.MAX_POWER, **{CONF_GRID_MAX_POWER: 5500, CONF_STATIC_VOLTAGE: 240}
+    )
+    # Car drawing its 20 A setpoint (4800 W); room = 5500 - 5356 + 4800 = 4944 W = 20.6 A.
+    _idle_power(
+        hass,
+        **{VOLTAGE: 240, BATTERY_POWER: 0, GRID: -5356, SWITCH: "on", AMPS: 20, CHARGING: "Charging"},
+    )
+    coordinator._last_target = 20
+
+    result = await coordinator._async_update_data()
+
+    assert result["target_amps"] == 20

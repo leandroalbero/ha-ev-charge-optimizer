@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections import deque
 from datetime import datetime, time, timedelta
 from typing import Any, assert_never
@@ -173,6 +174,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._boost_sampled_at: datetime | None = None
         self._boost_cooldown_until: datetime | None = None
         self._boost_guard_until: datetime | None = None
+        self._boost_hard_over_cycles = 0
         self._assist_over_cycles = 0
         self._assist_suspended_until: datetime | None = None
         self._shed_store: Store[dict[str, Any]] = Store(
@@ -598,8 +600,15 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 now,
                 above_contract=import_current > contract,
             )
+            # Two samples, not one: a single kettle spike shouldn't knock Boost
+            # back for a minute; at ~1.13 x In the ICP-M curve allows minutes.
             if import_current > BOOST_HARD_FACTOR * contract:
+                self._boost_hard_over_cycles += 1
+            else:
+                self._boost_hard_over_cycles = 0
+            if self._boost_hard_over_cycles >= 2:
                 self._boost_guard_until = now + BOOST_GUARD
+                self._boost_hard_over_cycles = 0
             if (
                 self._boost_budget_seconds(now) >= self._boost_limit_seconds()
                 and not self._boost_cooling(now)
@@ -1266,8 +1275,12 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         target = self._solar_amps(solar_surplus, floor=0)
                         available_power = solar_surplus
             case ChargeMode.MAX_POWER | ChargeMode.BOOST:
-                target = self._ramped_supply_target(
-                    min(self.max_amps, self._get_grid_available_amps())
+                # Floor, not round: the Boost cap sits ~0.5 A under the 1.10 x In
+                # guard, and rounding up by half an amp crossed it.
+                target = math.floor(
+                    self._ramped_supply_target(
+                        min(self.max_amps, self._get_grid_available_amps())
+                    )
                 )
                 available_power = self._grid_available_power()
             case unreachable:
