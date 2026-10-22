@@ -25,6 +25,7 @@ async def async_setup_entry(
             MinAmpsNumber(coordinator, entry),
             MaxAmpsNumber(coordinator, entry),
             MaxEvSocNumber(coordinator, entry),
+            SolarFloorAmpsNumber(coordinator, entry),
         ]
     )
 
@@ -149,4 +150,45 @@ class MaxEvSocNumber(
     async def async_set_native_value(self, value: float) -> None:
         """Update the SOC cap."""
         self.coordinator.max_ev_soc = value
+        await self.coordinator.async_request_refresh()
+
+
+class SolarFloorAmpsNumber(
+    CoordinatorEntity[EVChargeOptimizerCoordinator], RestoreNumber
+):
+    _attr_has_entity_name = True
+    _attr_name = "Solar Floor Amps"
+    _attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
+    _attr_mode = NumberMode.BOX
+    _attr_native_min_value = 0
+    _attr_native_max_value = 16
+    _attr_native_step = 1
+
+    def __init__(
+        self,
+        coordinator: EVChargeOptimizerCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_solar_floor_amps"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": "EV Charge Optimizer",
+            "manufacturer": "EV Charge Optimizer",
+        }
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_number_data()
+        if last is not None and last.native_value is not None:
+            self.coordinator.solar_floor_amps = float(last.native_value)
+        else:
+            self.coordinator.solar_floor_amps = 0
+
+    @property
+    def native_value(self) -> float:
+        return self.coordinator.solar_floor_amps
+
+    async def async_set_native_value(self, value: float) -> None:
+        self.coordinator.solar_floor_amps = value
         await self.coordinator.async_request_refresh()

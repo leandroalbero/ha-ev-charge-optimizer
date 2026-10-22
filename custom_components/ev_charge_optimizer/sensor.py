@@ -30,6 +30,7 @@ async def async_setup_entry(
             AvailablePowerSensor(coordinator, entry),
             EVPowerSensor(coordinator, entry),
             ShedLoadsSensor(coordinator, entry),
+            StatusSensor(coordinator, entry),
         ]
     )
 
@@ -163,3 +164,34 @@ class ShedLoadsSensor(CoordinatorEntity[EVChargeOptimizerCoordinator], SensorEnt
         if self.coordinator.data:
             loads = list(self.coordinator.data.get("shed_loads", []))
         return {"shed_loads": loads}
+
+
+class StatusSensor(CoordinatorEntity[EVChargeOptimizerCoordinator], SensorEntity):
+    _attr_has_entity_name = True
+    _attr_name = "Status"
+
+    def __init__(
+        self,
+        coordinator: EVChargeOptimizerCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_status"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": "EV Charge Optimizer",
+            "manufacturer": "EV Charge Optimizer",
+        }
+
+    @property
+    def native_value(self) -> str:
+        if self.coordinator.data:
+            return str(self.coordinator.data.get("status") or "")
+        return ""
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        if not self.coordinator.data:
+            return {}
+        attrs = self.coordinator.data.get("status_attributes") or {}
+        return dict(attrs)

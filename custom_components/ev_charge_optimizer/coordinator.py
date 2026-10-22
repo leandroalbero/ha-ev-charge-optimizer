@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections import deque
-from datetime import datetime, timedelta
-from typing import Any
+from datetime import datetime, time, timedelta
+from typing import Any, assert_never
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -14,47 +15,64 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
+    CONF_BATTERY_MAX_DISCHARGE_W,
     CONF_BATTERY_MIN_SOC,
     CONF_BATTERY_POWER_POSITIVE_DISCHARGE,
     CONF_BATTERY_POWER_SENSOR,
+    CONF_BATTERY_RESERVE_SOC,
     CONF_BATTERY_SOC_SENSOR,
+    CONF_BOOST_COOLDOWN_MINUTES,
+    CONF_BOOST_FACTOR,
+    CONF_BOOST_MAX_MINUTES,
     CONF_CHARGER_NUMBER_ENTITY,
     CONF_CHARGER_SWITCH_ENTITY,
     CONF_CHARGER_WAKE_ENTITY,
+    CONF_EV_BATTERY_KWH,
     CONF_EV_CHARGE_LIMIT_ENTITY,
     CONF_EV_CHARGING_STATE_SENSOR,
     CONF_EV_POWER_SENSOR,
     CONF_EV_SOC_SENSOR,
     CONF_GRID_EXPORT_SENSOR,
     CONF_GRID_MAX_POWER,
-    CONF_GUARANTEED_MIN_AMPS,
     CONF_HOUSE_CONSUMPTION_SENSOR,
+    CONF_INVERTER_AC_MAX_W,
     CONF_MAX_AMPS,
     CONF_MAX_STEP,
     CONF_MIN_AMPS,
+    CONF_PEAK_HOURS,
     CONF_POWER_BUFFER,
     CONF_PRIORITIZE_BATTERY,
     CONF_ROLLING_WINDOW,
     CONF_SHED_LOADS,
     CONF_SHED_MAX_MINUTES,
+    CONF_SOLAR_FORECAST_TODAY,
+    CONF_SOLAR_FORECAST_TOMORROW,
     CONF_SOLAR_PRODUCTION_SENSOR,
     CONF_STATIC_VOLTAGE,
     CONF_UPDATE_INTERVAL,
     CONF_VALLEY_AMPS,
     CONF_VALLEY_END,
     CONF_VALLEY_START,
-    CONF_VALLEY_TARGET_SOC,
     CONF_VOLTAGE_SENSOR,
+    CONF_WEEKENDS_VALLEY,
+    DEFAULT_BATTERY_MAX_DISCHARGE_W,
     DEFAULT_BATTERY_MIN_SOC,
     DEFAULT_BATTERY_POWER_POSITIVE_DISCHARGE,
+    DEFAULT_BATTERY_RESERVE_SOC,
+    DEFAULT_BOOST_COOLDOWN_MINUTES,
+    DEFAULT_BOOST_FACTOR,
+    DEFAULT_BOOST_MAX_MINUTES,
+    DEFAULT_EV_BATTERY_KWH,
     DEFAULT_GRID_MAX_POWER,
-    DEFAULT_GUARANTEED_MIN_AMPS,
+    DEFAULT_INVERTER_AC_MAX_W,
     DEFAULT_MAX_AMPS,
     DEFAULT_MAX_EV_SOC,
     DEFAULT_MAX_STEP,
     DEFAULT_MIN_AMPS,
+    DEFAULT_PEAK_HOURS,
     DEFAULT_POWER_BUFFER,
     DEFAULT_PRIORITIZE_BATTERY,
+    DEFAULT_READY_BY,
     DEFAULT_ROLLING_WINDOW,
     DEFAULT_SHED_MAX_MINUTES,
     DEFAULT_STATIC_VOLTAGE,
@@ -62,9 +80,33 @@ from .const import (
     DEFAULT_VALLEY_AMPS,
     DEFAULT_VALLEY_END,
     DEFAULT_VALLEY_START,
-    DEFAULT_VALLEY_TARGET_SOC,
+    DEFAULT_WEEKENDS_VALLEY,
     DOMAIN,
     ChargeMode,
+    coerce_mode,
+)
+from .ready_by import (
+    ReadyByInputs,
+    ReadyByPlan,
+    is_valley,
+    next_valley_start,
+    parse_peak_hours,
+    periods_from_raw,
+    plan_ready_by,
+    ready_by_status,
+    slot_attributes,
+)
+from .supply import (
+    ASSIST_SUSPEND,
+    BOOST_FALLBACK_VOLTAGE,
+    BOOST_GUARD,
+    BOOST_HARD_FACTOR,
+    accrue_boost,
+    battery_spare_watts,
+    boost_cap_watts,
+    boost_status_text,
+    budget_seconds,
+    contract_amps,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -74,6 +116,8 @@ SWITCH_OFF_RETRY = timedelta(minutes=5)
 SHED_STEP_DWELL = timedelta(seconds=60)
 SHED_COOLDOWN = timedelta(minutes=30)
 SHED_IDLE_CYCLES = 3
+SPARE_MIN_DISCHARGE_W = 200
+RUNTIME_SAVE_DELAY = 30
 _SHED_STORE_VERSION = 1
 _DRAWING_STATES = frozenset({"charging", "starting"})
 _NOT_CHARGEABLE_STATES = frozenset({"complete", "disconnected"})
@@ -109,20 +153,30 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_target: float = 0
         self._last_wake_at: datetime | None = None
         self._charger_off_sent_at: datetime | None = None
-        self.enabled: bool = True
-        self.mode: ChargeMode = ChargeMode(
-            entry.data.get("default_mode", ChargeMode.SOLAR_ONLY)
+        self.mode: ChargeMode = coerce_mode(
+            entry.data.get("default_mode", ChargeMode.SOLAR)
         )
         self.min_amps: float = self._opt(CONF_MIN_AMPS, DEFAULT_MIN_AMPS)
         self.max_amps: float = self._opt(CONF_MAX_AMPS, DEFAULT_MAX_AMPS)
         self.max_ev_soc: float = DEFAULT_MAX_EV_SOC
+        self.solar_floor_amps: float = 0.0
+        self.ready_by: time = _parse_hhmm(DEFAULT_READY_BY)
+        self._status_text = ""
         self._shed_ids: list[str] = []
+        self._pending_restore: list[str] = []
         self._shed_started_at: datetime | None = None
         self._last_shed_at: datetime | None = None
         self._shed_cooldown_until: datetime | None = None
         self._zero_ev_cycles = 0
         self._shed_store_loaded = False
         self._defer_shed = False
+        self._boost_samples: list[tuple[datetime, float]] = []
+        self._boost_sampled_at: datetime | None = None
+        self._boost_cooldown_until: datetime | None = None
+        self._boost_guard_until: datetime | None = None
+        self._boost_hard_over_cycles = 0
+        self._assist_over_cycles = 0
+        self._assist_suspended_until: datetime | None = None
         self._shed_store: Store[dict[str, Any]] = Store(
             hass,
             _SHED_STORE_VERSION,
@@ -346,21 +400,6 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._charger_off_sent_at = now
         await self._async_set_charger_switch(False)
 
-    def _ev_at_valley_target(self) -> bool:
-        """True when EV SOC sensor configured and SOC has hit the valley cap.
-
-        Returns False (no cap) if no EV SOC sensor is configured or its
-        value is unavailable, so behavior is unchanged for users who
-        haven't set one up.
-        """
-        soc = self._get_ev_soc()
-        if soc is None:
-            return False
-        target = float(
-            self._opt(CONF_VALLEY_TARGET_SOC, DEFAULT_VALLEY_TARGET_SOC)
-        )
-        return soc >= target
-
     def _get_sensor_state(self, entity_id: str | None) -> str | None:
         """Read the raw state string of an entity, or None if unavailable."""
         if not entity_id:
@@ -384,18 +423,20 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         return soc < threshold
 
-    def _is_valley_time(self) -> bool:
-        """Check if current time is within valley/off-peak window."""
-        now = _now().time()
-        start_str = self._opt(CONF_VALLEY_START, DEFAULT_VALLEY_START)
-        end_str = self._opt(CONF_VALLEY_END, DEFAULT_VALLEY_END)
-        start = _parse_hhmm(start_str)
-        end = _parse_hhmm(end_str)
+    def _valley_bounds(self) -> tuple[time, time]:
+        return (
+            _parse_hhmm(self._opt(CONF_VALLEY_START, DEFAULT_VALLEY_START)),
+            _parse_hhmm(self._opt(CONF_VALLEY_END, DEFAULT_VALLEY_END)),
+        )
 
-        if start <= end:
-            return start <= now <= end
-        # Overnight window (e.g., 23:00 - 07:00)
-        return now >= start or now <= end
+    def _weekends_valley(self) -> bool:
+        return bool(self._opt(CONF_WEEKENDS_VALLEY, DEFAULT_WEEKENDS_VALLEY))
+
+    def _is_valley_time(self) -> bool:
+        start, end = self._valley_bounds()
+        return is_valley(
+            _now(), start, end, weekends_valley=self._weekends_valley()
+        )
 
     def _grid_headroom_watts(self) -> float | None:
         """Watts the EV can draw without exceeding the grid contract.
@@ -416,13 +457,193 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         grid_max_power = float(
             self._opt(CONF_GRID_MAX_POWER, DEFAULT_GRID_MAX_POWER)
         )
-        return max(
-            0.0,
+        measured = self._measured_ev_watts()
+        car_first = self.mode in (ChargeMode.MAX_POWER, ChargeMode.BOOST)
+        # Outside the car-first modes the home battery keeps its grid charge;
+        # the battery MPC sizes that charge as if the EV weren't there.
+        yieldable = charge_from_grid if car_first else 0.0
+        classic = (
             grid_max_power
             - live_import
             - discharge_w
-            + charge_from_grid
-            + self._measured_ev_watts(),
+            + yieldable
+            + measured
+        )
+        if not car_first:
+            return max(0.0, classic)
+        now = _now()
+        cap = self._active_cap_watts(now)
+        if self._inverter_supply_active(now):
+            return max(
+                0.0,
+                cap - live_import + measured + self._battery_spare_watts(),
+            )
+        return max(
+            0.0,
+            cap - live_import - discharge_w + charge_from_grid + measured,
+        )
+
+    def _contract_amps(self) -> float:
+        return contract_amps(
+            float(self._opt(CONF_GRID_MAX_POWER, DEFAULT_GRID_MAX_POWER))
+        )
+
+    def _boost_limit_seconds(self) -> float:
+        return (
+            float(self._opt(CONF_BOOST_MAX_MINUTES, DEFAULT_BOOST_MAX_MINUTES))
+            * 60.0
+        )
+
+    def _boost_budget_seconds(self, now: datetime) -> float:
+        return budget_seconds(self._boost_samples, now)
+
+    def _boost_cooling(self, now: datetime) -> bool:
+        until = self._boost_cooldown_until
+        return until is not None and now < until
+
+    def _boost_guarding(self, now: datetime) -> bool:
+        until = self._boost_guard_until
+        return until is not None and now < until
+
+    def _assist_suspended(self, now: datetime) -> bool:
+        until = self._assist_suspended_until
+        return until is not None and now < until
+
+    def _boosting(self, now: datetime) -> bool:
+        if self.mode != ChargeMode.BOOST:
+            return False
+        if self._boost_guarding(now) or self._boost_cooling(now):
+            return False
+        return self._boost_budget_seconds(now) < self._boost_limit_seconds()
+
+    def _active_cap_watts(self, now: datetime) -> float:
+        grid_max = float(self._opt(CONF_GRID_MAX_POWER, DEFAULT_GRID_MAX_POWER))
+        if not self._boosting(now):
+            return grid_max
+        factor = float(self._opt(CONF_BOOST_FACTOR, DEFAULT_BOOST_FACTOR))
+        return boost_cap_watts(grid_max, factor, self._boost_voltage())
+
+    def _boost_voltage(self) -> float:
+        """Mains volts for the over-contract current limit.
+
+        The static fallback (240 V) would put 1.08×In at ~1.13×In on a real
+        230 V supply, past the ICP-M 1.1×In no-trip point. Without a real
+        reading, assume a low mains voltage so Boost adds almost nothing.
+        """
+        val = self._get_sensor_value(self._entry.data.get(CONF_VOLTAGE_SENSOR))
+        if val and 100 <= val <= 260:
+            return val
+        return BOOST_FALLBACK_VOLTAGE
+
+    def _inverter_supply_active(self, now: datetime) -> bool:
+        if self.mode not in (ChargeMode.MAX_POWER, ChargeMode.BOOST):
+            return False
+        if self._assist_suspended(now):
+            return False
+        if float(self._opt(CONF_BATTERY_MAX_DISCHARGE_W, 0)) <= 0:
+            return False
+        if float(self._opt(CONF_INVERTER_AC_MAX_W, 0)) <= 0:
+            return False
+        soc = self._get_sensor_value(self._entity(CONF_BATTERY_SOC_SENSOR))
+        if soc is None:
+            return False
+        reserve = float(
+            self._opt(CONF_BATTERY_RESERVE_SOC, DEFAULT_BATTERY_RESERVE_SOC)
+        )
+        return soc > reserve
+
+    def _battery_spare_watts(self) -> float:
+        now = _now()
+        if not self._inverter_supply_active(now):
+            return 0.0
+        pv = self._get_sensor_value(self._entity(CONF_SOLAR_PRODUCTION_SENSOR))
+        if pv is None:
+            return 0.0
+        charge_w, discharge_w = self._battery_flows()
+        # A GoodWe reads 0 W for ~35 s after leaving eco_charge; only a battery
+        # already discharging proves it will follow the EV. In self-use it starts
+        # by itself as soon as import appears, so the climb still begins.
+        if charge_w > 0 or discharge_w < SPARE_MIN_DISCHARGE_W:
+            return 0.0
+        return battery_spare_watts(
+            max_discharge_w=float(
+                self._opt(
+                    CONF_BATTERY_MAX_DISCHARGE_W, DEFAULT_BATTERY_MAX_DISCHARGE_W
+                )
+            ),
+            inverter_ac_max_w=float(
+                self._opt(CONF_INVERTER_AC_MAX_W, DEFAULT_INVERTER_AC_MAX_W)
+            ),
+            pv_w=pv,
+            discharge_w=discharge_w,
+        )
+
+    def _advance_supply(self, now: datetime) -> None:
+        if self.mode != ChargeMode.BOOST:
+            # Time outside Boost must not be accrued as one huge sample on re-entry.
+            self._boost_sampled_at = None
+        if self.mode not in (ChargeMode.MAX_POWER, ChargeMode.BOOST):
+            return
+        grid_export = self._get_sensor_value(
+            self._entry.data.get(CONF_GRID_EXPORT_SENSOR)
+        )
+        if grid_export is None:
+            return
+        live_import = max(0.0, -grid_export)
+        voltage = self._boost_voltage()
+        import_current = live_import / voltage if voltage > 0 else 0.0
+        contract = self._contract_amps()
+        if self.mode == ChargeMode.BOOST:
+            self._boost_samples, self._boost_sampled_at = accrue_boost(
+                self._boost_samples,
+                self._boost_sampled_at,
+                now,
+                above_contract=import_current > contract,
+            )
+            # Two samples, not one: a single kettle spike shouldn't knock Boost
+            # back for a minute; at ~1.13 x In the ICP-M curve allows minutes.
+            if import_current > BOOST_HARD_FACTOR * contract:
+                self._boost_hard_over_cycles += 1
+            else:
+                self._boost_hard_over_cycles = 0
+            if self._boost_hard_over_cycles >= 2:
+                self._boost_guard_until = now + BOOST_GUARD
+                self._boost_hard_over_cycles = 0
+            if (
+                self._boost_budget_seconds(now) >= self._boost_limit_seconds()
+                and not self._boost_cooling(now)
+            ):
+                minutes = float(
+                    self._opt(
+                        CONF_BOOST_COOLDOWN_MINUTES,
+                        DEFAULT_BOOST_COOLDOWN_MINUTES,
+                    )
+                )
+                self._boost_cooldown_until = now + timedelta(minutes=minutes)
+        # Only an overshoot while battery spare is credited says the battery
+        # didn't deliver; a house spike during a grid-only start is not that.
+        if live_import > self._active_cap_watts(now) and self._battery_spare_watts() > 0:
+            self._assist_over_cycles += 1
+        else:
+            self._assist_over_cycles = 0
+        if self._assist_over_cycles >= 2:
+            self._assist_suspended_until = now + ASSIST_SUSPEND
+            self._assist_over_cycles = 0
+
+    def _boost_status(self, now: datetime) -> str:
+        factor = float(self._opt(CONF_BOOST_FACTOR, DEFAULT_BOOST_FACTOR))
+        over = (factor - 1.0) * self._contract_amps()
+        remaining = self._boost_limit_seconds() - self._boost_budget_seconds(now)
+        cooldown_left = 0.0
+        if self._boost_cooldown_until is not None:
+            cooldown_left = (self._boost_cooldown_until - now).total_seconds()
+        return boost_status_text(
+            guarding=self._boost_guarding(now),
+            cooling=self._boost_cooling(now)
+            or self._boost_budget_seconds(now) >= self._boost_limit_seconds(),
+            cooldown_remaining_s=cooldown_left,
+            over_amps=over,
+            minutes_remaining=max(0, round(remaining / 60)),
         )
 
     def _get_grid_available_amps(self) -> float:
@@ -449,34 +670,43 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return False
         return headroom / voltage < self.max_amps
 
-    def _calculate_solar_only(self, available_power: float) -> float:
-        """Solar Only: charge from surplus only."""
+    def _solar_amps(self, available_power: float, *, floor: float) -> float:
         voltage = self._get_voltage()
         if voltage <= 0:
             return 0
-        return available_power / voltage
+        solar_amps = available_power / voltage
+        if floor <= 0:
+            return solar_amps
+        return min(max(solar_amps, floor), self._get_grid_available_amps())
 
-    def _calculate_max_grid(self) -> float:
-        """Max Power: charge at max without exceeding grid capacity."""
-        return min(self.max_amps, self._get_grid_available_amps())
-
-    def _calculate_valley(self, available_power: float) -> float:
-        """Valley: charge at configured amps during off-peak, solar otherwise."""
+    def _cheap_target(self, solar_surplus: float) -> tuple[float, float]:
         if self._is_valley_time():
-            if self._ev_at_valley_target():
-                return 0
             valley_amps = float(self._opt(CONF_VALLEY_AMPS, DEFAULT_VALLEY_AMPS))
-            return min(valley_amps, self._get_grid_available_amps())
-        return self._calculate_solar_only(available_power)
+            return (
+                min(valley_amps, self._get_grid_available_amps()),
+                self._grid_available_power(),
+            )
+        return self._solar_amps(solar_surplus, floor=0), solar_surplus
 
-    def _calculate_min_topup(self, available_power: float) -> float:
-        """Min Solar + Grid Top-up: solar surplus with guaranteed minimum."""
-        solar_amps = self._calculate_solar_only(available_power)
-        guaranteed = float(
-            self._opt(CONF_GUARANTEED_MIN_AMPS, DEFAULT_GUARANTEED_MIN_AMPS)
-        )
-        grid_cap = self._get_grid_available_amps()
-        return min(max(solar_amps, guaranteed), grid_cap)
+    def _ramped_supply_target(self, target: float) -> float:
+        """Climb onto battery spare a step at a time.
+
+        A reading of 0 W says nothing about whether the inverter will
+        discharge (an MPC can hold it in eco_charge). Jumping to the full
+        spare credit spiked import to 1.45 x In live; small steps keep any
+        miss within what the overshoot guard catches in two cycles.
+        """
+        if target <= self._last_target:
+            return target
+        if self._last_target <= 0:
+            voltage = self._get_voltage()
+            spare = self._battery_spare_watts()
+            headroom = self._grid_headroom_watts()
+            if headroom is None or voltage <= 0:
+                return 0
+            return min(target, max(0.0, headroom - spare) / voltage)
+        max_step = float(self._opt(CONF_MAX_STEP, DEFAULT_MAX_STEP))
+        return min(target, self._last_target + max_step)
 
     def _apply_step_limit(self, target: float) -> float:
         """Limit amps change per cycle to prevent oscillation."""
@@ -608,35 +838,111 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             {"entity_id": entity_id},
         )
 
-    async def _async_save_shed(self) -> None:
-        started = (
-            self._shed_started_at.isoformat() if self._shed_started_at else None
+    def _iso(self, moment: datetime | None) -> str | None:
+        return moment.isoformat() if moment else None
+
+    def _runtime_payload(self) -> dict[str, Any]:
+        return {
+            "entity_ids": list(self._shed_ids),
+            "pending_restore": list(self._pending_restore),
+            "started_at": self._iso(self._shed_started_at),
+            "boost_samples": [
+                [moment.isoformat(), seconds]
+                for moment, seconds in self._boost_samples
+            ],
+            "boost_cooldown_until": self._iso(self._boost_cooldown_until),
+            "boost_guard_until": self._iso(self._boost_guard_until),
+            "assist_suspended_until": self._iso(self._assist_suspended_until),
+        }
+
+    def _load_supply(self, stored: dict[str, Any]) -> None:
+        samples: list[tuple[datetime, float]] = []
+        for item in stored.get("boost_samples") or []:
+            try:
+                at_raw, seconds_raw = item
+                samples.append((datetime.fromisoformat(at_raw), float(seconds_raw)))
+            except (TypeError, ValueError):
+                continue
+        self._boost_samples = samples
+        if samples:
+            self._boost_sampled_at = max(sample[0] for sample in samples)
+        self._boost_cooldown_until = self._parse_stored_time(
+            stored.get("boost_cooldown_until")
         )
-        await self._shed_store.async_save(
-            {"entity_ids": list(self._shed_ids), "started_at": started}
+        self._boost_guard_until = self._parse_stored_time(
+            stored.get("boost_guard_until")
+        )
+        self._assist_suspended_until = self._parse_stored_time(
+            stored.get("assist_suspended_until")
         )
 
+    def _parse_stored_time(self, value: object) -> datetime | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+
+    async def _async_save_runtime(self) -> None:
+        await self._shed_store.async_save(self._runtime_payload())
+
+    async def _async_save_shed(self) -> None:
+        await self._async_save_runtime()
+
     async def _async_restore_persisted_shed_once(self) -> None:
-        """Turn shed loads back on after a restart so a fridge is not left off."""
+        """Queue loads shed before a restart so a fridge is not left off."""
         if self._shed_store_loaded:
             return
         self._shed_store_loaded = True
         stored = await self._shed_store.async_load()
         if not stored:
             return
-        entity_ids = [str(item) for item in stored.get("entity_ids") or [] if item]
-        if not entity_ids:
+        self._load_supply(stored)
+        queued = [
+            str(item)
+            for key in ("entity_ids", "pending_restore")
+            for item in stored.get(key) or []
+            if item
+        ]
+        if not queued:
             return
-        for entity_id in entity_ids:
-            await self._async_set_load(entity_id, True)
+        for entity_id in queued:
+            if entity_id not in self._pending_restore:
+                self._pending_restore.append(entity_id)
         self._defer_shed = True
-        await self._shed_store.async_save({"entity_ids": [], "started_at": None})
+        self._shed_ids.clear()
+        self._shed_started_at = None
+        await self._async_save_runtime()
+
+    async def _async_process_pending_restore(self) -> None:
+        """Turn queued loads on, keeping each queued until it reads on.
+
+        Right after an HA start the switch integrations are often not loaded
+        yet; a turn_on then is silently dropped, which once left the fridge
+        off for 15 minutes.
+        """
+        if not self._pending_restore:
+            return
+        remaining: list[str] = []
+        for entity_id in self._pending_restore:
+            state = self.hass.states.get(entity_id)
+            if state is not None and state.state == "on":
+                continue
+            remaining.append(entity_id)
+            if state is None or state.state in ("unknown", "unavailable"):
+                continue
+            await self._async_set_load(entity_id, True)
+        if remaining != self._pending_restore:
+            self._pending_restore = remaining
+            await self._async_save_runtime()
 
     async def _async_restore_shed(self, *, cooldown: bool) -> None:
         if not self._shed_ids and not cooldown:
             return
-        for entity_id in list(self._shed_ids):
-            await self._async_set_load(entity_id, True)
+        for entity_id in self._shed_ids:
+            if entity_id not in self._pending_restore:
+                self._pending_restore.append(entity_id)
         self._shed_ids.clear()
         self._shed_started_at = None
         self._last_shed_at = None
@@ -644,10 +950,13 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if cooldown:
             self._shed_cooldown_until = _now() + SHED_COOLDOWN
         await self._async_save_shed()
+        await self._async_process_pending_restore()
 
     async def _async_shed_next(self) -> None:
         if self._defer_shed:
             self._defer_shed = False
+            return
+        if self._pending_restore:
             return
         now = _now()
         if self._shed_cooldown_until and now < self._shed_cooldown_until:
@@ -681,10 +990,9 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         else:
             self._zero_ev_cycles = 0
 
-        if (
-            not self.enabled
-            or not self._car_can_charge()
-            or self.mode != ChargeMode.MAX_SOLAR_GRID
+        if not self._car_can_charge() or self.mode not in (
+            ChargeMode.MAX_POWER,
+            ChargeMode.BOOST,
         ):
             await self._async_restore_shed(cooldown=False)
             return
@@ -700,40 +1008,170 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._async_shed_next()
 
     def _status(
-        self, target: float, available: float, *, enabled: bool
+        self,
+        target: float,
+        available: float,
+        text: str,
+        attrs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        shown = text[:255]
+        self._status_text = shown
         return {
             "target_amps": round(target),
             "available_power": round(available, 1),
             "mode": self.mode,
-            "enabled": enabled,
             "ev_power": round(self._measured_ev_watts(), 1),
             "shed_loads": list(self._shed_ids),
+            "status": shown,
+            "status_attributes": attrs or {},
         }
+
+    def _slider_reached(self) -> bool:
+        soc = self._get_ev_soc()
+        if soc is None or soc < float(self.max_ev_soc):
+            return False
+        state = self._charging_state()
+        return not (
+            state is not None and state.strip().casefold() == "disconnected"
+        )
+
+    def _unchargeable_status(self) -> str:
+        state = self._charging_state()
+        if state is not None and state.strip().casefold() == "disconnected":
+            return "Car unplugged"
+        return "Car full / at limit"
+
+    def _forecast_periods(self):
+        periods = []
+        for key in (CONF_SOLAR_FORECAST_TODAY, CONF_SOLAR_FORECAST_TOMORROW):
+            entity = self._entity(key)
+            if not entity:
+                continue
+            state = self.hass.states.get(entity)
+            if state is None or state.state in ("unknown", "unavailable"):
+                continue
+            periods.extend(periods_from_raw(state.attributes.get("detailedHourly")))
+        return tuple(periods)
+
+    def _ready_inputs(self, now: datetime, soc: float) -> ReadyByInputs:
+        voltage = self._get_voltage()
+        house = (
+            self._get_sensor_value(
+                self._entry.data.get(CONF_HOUSE_CONSUMPTION_SENSOR)
+            )
+            or 0.0
+        )
+        house_wo = max(0.0, house - self._measured_ev_watts())
+        grid_max = float(self._opt(CONF_GRID_MAX_POWER, DEFAULT_GRID_MAX_POWER))
+        power_w = min(self.max_amps * voltage, grid_max - house_wo)
+        start, end = self._valley_bounds()
+        return ReadyByInputs(
+            now=now,
+            ready=self.ready_by,
+            soc=soc,
+            target_soc=float(self.max_ev_soc),
+            battery_kwh=float(
+                self._opt(CONF_EV_BATTERY_KWH, DEFAULT_EV_BATTERY_KWH)
+            ),
+            power_kw=max(0.0, power_w) / 1000,
+            valley_start=start,
+            valley_end=end,
+            weekends_valley=self._weekends_valley(),
+            peak_hours=parse_peak_hours(
+                str(self._opt(CONF_PEAK_HOURS, DEFAULT_PEAK_HOURS))
+            ),
+            house_kw=house_wo / 1000,
+            max_kw=max(0.0, self.max_amps * voltage / 1000),
+            periods=self._forecast_periods(),
+        )
+
+    def _plan_attributes(self, plan: ReadyByPlan) -> dict[str, Any]:
+        return {
+            "deadline": plan.deadline.isoformat(),
+            "need_kwh": plan.need_kwh,
+            "chosen_slots": slot_attributes(plan.chosen),
+            "shortfall_kwh": plan.shortfall_kwh,
+            "projected_soc": plan.projected_soc,
+        }
+
+    def _describe(
+        self,
+        target: float,
+        solar_surplus: float,
+        plan: ReadyByPlan | None,
+        *,
+        missing_soc: bool,
+        now: datetime,
+    ) -> str:
+        match self.mode:
+            case ChargeMode.OFF:
+                return "Off"
+            case ChargeMode.SOLAR:
+                if round(target) <= 0:
+                    return "Solar: waiting for surplus"
+                return (
+                    f"Solar: {max(solar_surplus, 0) / 1000:.1f} kW surplus "
+                    f"→ {round(target)} A"
+                )
+            case ChargeMode.CHEAP:
+                if not self._is_valley_time():
+                    start, end = self._valley_bounds()
+                    nxt = next_valley_start(
+                        now, start, end, weekends_valley=self._weekends_valley()
+                    )
+                    return f"Cheap: waiting for valley at {nxt:%H:%M}"
+                amps = round(target)
+                valley_amps = float(self._opt(CONF_VALLEY_AMPS, DEFAULT_VALLEY_AMPS))
+                requested = round(min(valley_amps, self.max_amps))
+                if amps < requested:
+                    return f"Cheap: valley, {amps} A (grid cap)"
+                return f"Cheap: valley, {amps} A"
+            case ChargeMode.READY_BY:
+                if missing_soc or plan is None:
+                    return "Ready By: SoC unavailable, using Cheap"
+                return ready_by_status(plan, now)
+            case ChargeMode.MAX_POWER:
+                cap = " (grid cap)" if self._grid_limited() else ""
+                count = len(self._shed_ids)
+                noun = "load" if count == 1 else "loads"
+                return f"Max Power: {round(target)} A{cap}, shed {count} {noun}"
+            case ChargeMode.BOOST:
+                return self._boost_status(now)
+            case unreachable:
+                assert_never(unreachable)
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Run the regulation loop."""
         await self._async_restore_persisted_shed_once()
+        await self._async_process_pending_restore()
         try:
             return await self._async_regulate()
         finally:
             self._defer_shed = False
+            # Shed/restore changes save immediately; Boost accounting can lag.
+            self._shed_store.async_delay_save(self._runtime_payload, RUNTIME_SAVE_DELAY)
 
     async def _async_regulate(self) -> dict[str, Any]:
         """One regulation cycle. Caller clears the restart shed deferral."""
-        if not self.enabled:
+        if self.mode == ChargeMode.OFF:
             self._last_target = 0
-            await self._async_set_charger_amps(0)
+            await self._async_stop_unchargeable()
             await self._async_restore_shed(cooldown=False)
-            return self._status(0, 0, enabled=False)
+            return self._status(0, 0, "Off")
 
         if not self._car_can_charge():
             await self._async_stop_unchargeable()
             await self._async_restore_shed(cooldown=False)
-            return self._status(0, 0, enabled=True)
+            self._last_target = 0
+            text = self._unchargeable_status()
+            if self.mode == ChargeMode.READY_BY and self._slider_reached():
+                text = (
+                    f"Ready By {self.ready_by:%H:%M}: "
+                    f"target {round(self.max_ev_soc)}% reached"
+                )
+            return self._status(0, 0, text)
         self._charger_off_sent_at = None
 
-        voltage = self._get_voltage()
         power_buffer = float(self._opt(CONF_POWER_BUFFER, DEFAULT_POWER_BUFFER))
         charger_power = self._measured_ev_watts()
 
@@ -759,7 +1197,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             if grid_export is None:
                 _LOGGER.debug("Grid export sensor unavailable, skipping cycle")
-                return self._status(self._last_target, 0, enabled=True)
+                return self._status(self._last_target, 0, self._status_text)
             if grid_export > 0:
                 self._record_reading(grid_export + charger_power, charger_power)
             else:
@@ -775,7 +1213,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.debug(
                     "Solar production sensor unavailable, skipping cycle"
                 )
-                return self._status(self._last_target, 0, enabled=True)
+                return self._status(self._last_target, 0, self._status_text)
             house_consumption = self._get_sensor_value(
                 self._entry.data.get(CONF_HOUSE_CONSUMPTION_SENSOR)
             ) or 0
@@ -791,54 +1229,73 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
         solar_surplus = self._rolling_average() - power_buffer
-        grid_capacity = self._grid_available_power()
-
-        # Battery-priority gate: in pure solar modes, hold off charging
-        # until the home battery has reached its minimum SOC. Grid-backed
-        # modes (Max Power, Valley) are unaffected because the user
-        # explicitly opted into pulling from the grid.
+        now = _now()
+        self._advance_supply(now)
+        plan: ReadyByPlan | None = None
+        attrs: dict[str, Any] = {}
+        missing_soc = False
+        charging_grid = False
         battery_blocks = self._battery_blocks_solar_charge()
 
-        # Mode dispatch
-        if self.mode == ChargeMode.SOLAR_ONLY:
-            if battery_blocks:
-                target = 0
-                available_power = 0
-            else:
-                target = self._calculate_solar_only(solar_surplus)
-                available_power = solar_surplus
-        elif self.mode == ChargeMode.MAX_SOLAR_GRID:
-            target = self._calculate_max_grid()
-            available_power = grid_capacity
-        elif self.mode == ChargeMode.VALLEY:
-            target = self._calculate_valley(solar_surplus)
-            available_power = grid_capacity if self._is_valley_time() else solar_surplus
-        elif self.mode == ChargeMode.MIN_SOLAR_TOPUP:
-            if battery_blocks:
-                target = 0
-                available_power = 0
-            else:
-                target = self._calculate_min_topup(solar_surplus)
-                guaranteed_power = float(
-                    self._opt(CONF_GUARANTEED_MIN_AMPS, DEFAULT_GUARANTEED_MIN_AMPS)
-                ) * voltage
-                available_power = max(solar_surplus, guaranteed_power)
-        else:
-            target = 0
-            available_power = 0
+        match self.mode:
+            case ChargeMode.OFF:
+                target = 0.0
+                available_power = 0.0
+            case ChargeMode.SOLAR:
+                if battery_blocks:
+                    target = 0.0
+                    available_power = 0.0
+                else:
+                    target = self._solar_amps(
+                        solar_surplus, floor=self.solar_floor_amps
+                    )
+                    available_power = solar_surplus
+            case ChargeMode.CHEAP:
+                target, available_power = self._cheap_target(solar_surplus)
+            case ChargeMode.READY_BY:
+                soc = self._get_ev_soc()
+                if soc is None:
+                    missing_soc = True
+                    target, available_power = self._cheap_target(solar_surplus)
+                else:
+                    plan = plan_ready_by(self._ready_inputs(now, soc))
+                    attrs = self._plan_attributes(plan)
+                    charging_grid = (
+                        plan.raw_need_kwh > 0
+                        and plan.need_kwh > 0
+                        and plan.charges_at(now)
+                    )
+                    if charging_grid:
+                        target = min(self.max_amps, self._get_grid_available_amps())
+                        available_power = self._grid_available_power()
+                    elif battery_blocks:
+                        target = 0.0
+                        available_power = 0.0
+                    else:
+                        target = self._solar_amps(solar_surplus, floor=0)
+                        available_power = solar_surplus
+            case ChargeMode.MAX_POWER | ChargeMode.BOOST:
+                # Floor, not round: the Boost cap sits ~0.5 A under the 1.10 x In
+                # guard, and rounding up by half an amp crossed it.
+                target = math.floor(
+                    self._ramped_supply_target(
+                        min(self.max_amps, self._get_grid_available_amps())
+                    )
+                )
+                available_power = self._grid_available_power()
+            case unreachable:
+                assert_never(unreachable)
 
-        # Clamp to min/max
         target = max(0, min(target, self.max_amps))
+        # Step limit only while a solar target is already moving. A start
+        # from 0 would deadlock under min_amps; a stop must not ramp down
+        # while the house is importing.
+        solar_ramp = self.mode == ChargeMode.SOLAR or (
+            self.mode == ChargeMode.READY_BY and not charging_grid
+        )
+        if solar_ramp and self._last_target > 0 and target > 0:
+            target = self._apply_step_limit(target)
 
-        # Apply step limiting only for solar-based modes (prevents oscillation).
-        # Skip when starting from zero (avoids min_amps deadlock) and when
-        # stopping (allows immediate stop instead of 5-min ramp-down while
-        # importing from the grid).
-        if self.mode in (ChargeMode.SOLAR_ONLY, ChargeMode.MIN_SOLAR_TOPUP):
-            if self._last_target > 0 and target > 0:
-                target = self._apply_step_limit(target)
-
-        # Below minimum → stop charging
         if target < self.min_amps:
             target = 0
 
@@ -847,4 +1304,11 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_set_charger_amps(target)
         await self._async_sync_shed(target)
 
-        return self._status(target, available_power, enabled=True)
+        text = self._describe(
+            target,
+            solar_surplus,
+            plan,
+            missing_soc=missing_soc,
+            now=now,
+        )
+        return self._status(target, available_power, text, attrs)

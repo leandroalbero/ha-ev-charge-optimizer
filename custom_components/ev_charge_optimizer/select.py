@@ -9,7 +9,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, LEGACY_MODE_LABELS, MODE_LABELS
+from .const import DOMAIN, LEGACY_MODE_LABELS, MODE_LABELS, coerce_mode
 from .coordinator import EVChargeOptimizerCoordinator
 
 
@@ -53,9 +53,12 @@ class ChargeModeSelect(
         last = await self.async_get_last_state()
         if last is None:
             return
-        mode = self._label_to_mode.get(last.state) or LEGACY_MODE_LABELS.get(last.state)
-        if mode:
-            self.coordinator.mode = mode
+        mode = self._label_to_mode.get(last.state) or LEGACY_MODE_LABELS.get(
+            last.state
+        )
+        if mode is None:
+            mode = coerce_mode(last.state)
+        self.coordinator.mode = mode
 
     @property
     def current_option(self) -> str | None:
