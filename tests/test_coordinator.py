@@ -896,3 +896,54 @@ async def test_max_mode_is_labelled_max_power_and_old_label_still_restores(
     state = hass.states.get("select.ev_charge_optimizer_charging_mode")
     assert state.state == "Max Power"
     assert "Max Solar + Grid" not in state.attributes["options"]
+
+
+async def test_restart_retries_restore_until_the_load_is_really_on(
+    hass: HomeAssistant,
+) -> None:
+    services = _services(hass)
+    coordinator = _shed_coordinator(hass, [FRIDGE])
+    _limited_grid(hass)
+    _set(hass, **{FRIDGE: "on"})
+    shed = await coordinator._async_update_data()
+    assert shed["shed_loads"] == [FRIDGE]
+
+    restarted = EVChargeOptimizerCoordinator(hass, coordinator._entry)
+    hass.states.async_set(FRIDGE, "unavailable")
+    await restarted._async_update_data()
+    assert _calls(services.turn_on, FRIDGE) == []
+    assert restarted._pending_restore == [FRIDGE]
+
+    _set(hass, **{FRIDGE: "off"})
+    await restarted._async_update_data()
+    assert len(_calls(services.turn_on, FRIDGE)) == 1
+    assert restarted._pending_restore == [FRIDGE]
+
+    restarted.mode = ChargeMode.CHEAP
+    _set(hass, **{FRIDGE: "on"})
+    await restarted._async_update_data()
+    assert restarted._pending_restore == []
+
+    again = EVChargeOptimizerCoordinator(hass, coordinator._entry)
+    _set(hass, **{FRIDGE: "off"})
+    await again._async_update_data()
+    assert len(_calls(services.turn_on, FRIDGE)) == 1
+
+
+async def test_leaving_max_mode_retries_an_unavailable_shed_load(
+    hass: HomeAssistant,
+) -> None:
+    services = _services(hass)
+    coordinator = _shed_coordinator(hass, [FRIDGE])
+    _limited_grid(hass)
+    _set(hass, **{FRIDGE: "on"})
+    await coordinator._async_update_data()
+
+    coordinator.mode = ChargeMode.CHEAP
+    hass.states.async_set(FRIDGE, "unavailable")
+    await coordinator._async_update_data()
+    assert _calls(services.turn_on, FRIDGE) == []
+
+    _set(hass, **{FRIDGE: "off"})
+    await coordinator._async_update_data()
+    assert len(_calls(services.turn_on, FRIDGE)) == 1

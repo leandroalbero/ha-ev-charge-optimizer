@@ -6,6 +6,7 @@ from datetime import datetime, time, timedelta
 
 import pytest
 import voluptuous as vol
+from homeassistant.const import EVENT_HOMEASSISTANT_FINAL_WRITE
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import (
@@ -1047,6 +1048,8 @@ async def test_boost_budget_survives_restart(
     accrued = await coordinator._async_update_data()
     assert accrued["status"] == "Boost: +1.9 A over contract, 40 min left"
 
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_FINAL_WRITE)
+    await hass.async_block_till_done()
     restarted = EVChargeOptimizerCoordinator(hass, coordinator._entry)
     restarted.mode = ChargeMode.BOOST
     kept = await restarted._async_update_data()

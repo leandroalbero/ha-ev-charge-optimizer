@@ -116,6 +116,7 @@ SHED_STEP_DWELL = timedelta(seconds=60)
 SHED_COOLDOWN = timedelta(minutes=30)
 SHED_IDLE_CYCLES = 3
 SPARE_MIN_DISCHARGE_W = 200
+RUNTIME_SAVE_DELAY = 30
 _SHED_STORE_VERSION = 1
 _DRAWING_STATES = frozenset({"charging", "starting"})
 _NOT_CHARGEABLE_STATES = frozenset({"complete", "disconnected"})
@@ -161,6 +162,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.ready_by: time = _parse_hhmm(DEFAULT_READY_BY)
         self._status_text = ""
         self._shed_ids: list[str] = []
+        self._pending_restore: list[str] = []
         self._shed_started_at: datetime | None = None
         self._last_shed_at: datetime | None = None
         self._shed_cooldown_until: datetime | None = None
@@ -829,6 +831,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _runtime_payload(self) -> dict[str, Any]:
         return {
             "entity_ids": list(self._shed_ids),
+            "pending_restore": list(self._pending_restore),
             "started_at": self._iso(self._shed_started_at),
             "boost_samples": [
                 [moment.isoformat(), seconds]
@@ -875,7 +878,7 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self._async_save_runtime()
 
     async def _async_restore_persisted_shed_once(self) -> None:
-        """Turn shed loads back on after a restart so a fridge is not left off."""
+        """Queue loads shed before a restart so a fridge is not left off."""
         if self._shed_store_loaded:
             return
         self._shed_store_loaded = True
@@ -883,21 +886,50 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not stored:
             return
         self._load_supply(stored)
-        entity_ids = [str(item) for item in stored.get("entity_ids") or [] if item]
-        if not entity_ids:
+        queued = [
+            str(item)
+            for key in ("entity_ids", "pending_restore")
+            for item in stored.get(key) or []
+            if item
+        ]
+        if not queued:
             return
-        for entity_id in entity_ids:
-            await self._async_set_load(entity_id, True)
+        for entity_id in queued:
+            if entity_id not in self._pending_restore:
+                self._pending_restore.append(entity_id)
         self._defer_shed = True
         self._shed_ids.clear()
         self._shed_started_at = None
         await self._async_save_runtime()
 
+    async def _async_process_pending_restore(self) -> None:
+        """Turn queued loads on, keeping each queued until it reads on.
+
+        Right after an HA start the switch integrations are often not loaded
+        yet; a turn_on then is silently dropped, which once left the fridge
+        off for 15 minutes.
+        """
+        if not self._pending_restore:
+            return
+        remaining: list[str] = []
+        for entity_id in self._pending_restore:
+            state = self.hass.states.get(entity_id)
+            if state is not None and state.state == "on":
+                continue
+            remaining.append(entity_id)
+            if state is None or state.state in ("unknown", "unavailable"):
+                continue
+            await self._async_set_load(entity_id, True)
+        if remaining != self._pending_restore:
+            self._pending_restore = remaining
+            await self._async_save_runtime()
+
     async def _async_restore_shed(self, *, cooldown: bool) -> None:
         if not self._shed_ids and not cooldown:
             return
-        for entity_id in list(self._shed_ids):
-            await self._async_set_load(entity_id, True)
+        for entity_id in self._shed_ids:
+            if entity_id not in self._pending_restore:
+                self._pending_restore.append(entity_id)
         self._shed_ids.clear()
         self._shed_started_at = None
         self._last_shed_at = None
@@ -905,10 +937,13 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if cooldown:
             self._shed_cooldown_until = _now() + SHED_COOLDOWN
         await self._async_save_shed()
+        await self._async_process_pending_restore()
 
     async def _async_shed_next(self) -> None:
         if self._defer_shed:
             self._defer_shed = False
+            return
+        if self._pending_restore:
             return
         now = _now()
         if self._shed_cooldown_until and now < self._shed_cooldown_until:
@@ -1095,11 +1130,13 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Run the regulation loop."""
         await self._async_restore_persisted_shed_once()
+        await self._async_process_pending_restore()
         try:
             return await self._async_regulate()
         finally:
             self._defer_shed = False
-            await self._async_save_runtime()
+            # Shed/restore changes save immediately; Boost accounting can lag.
+            self._shed_store.async_delay_save(self._runtime_payload, RUNTIME_SAVE_DELAY)
 
     async def _async_regulate(self) -> dict[str, Any]:
         """One regulation cycle. Caller clears the restart shed deferral."""
