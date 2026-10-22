@@ -37,6 +37,7 @@ from custom_components.ev_charge_optimizer.const import (
     CONF_EV_SOC_SENSOR,
     CONF_GRID_EXPORT_SENSOR,
     CONF_GRID_MAX_POWER,
+    CONF_MAX_STEP,
     CONF_GUARANTEED_MIN_AMPS,
     CONF_HOUSE_CONSUMPTION_SENSOR,
     CONF_INVERTER_AC_MAX_W,
@@ -1217,3 +1218,30 @@ async def test_reentering_boost_does_not_count_time_spent_in_other_modes(
     back = await coordinator._async_update_data()
 
     assert back["status"] == "Boost: +1.9 A over contract, 50 min left"
+
+
+async def test_no_battery_spare_while_the_battery_is_charging(
+    hass: HomeAssistant,
+) -> None:
+    coordinator = _coordinator(hass, ChargeMode.MAX_POWER, **_assist())
+    _idle_power(hass, **{BATTERY_POWER: 500})
+
+    assert coordinator._battery_spare_watts() == 0
+
+
+async def test_max_power_ramps_up_by_max_step_and_starts_on_grid_only(
+    hass: HomeAssistant,
+) -> None:
+    _services(hass)
+    coordinator = _coordinator(hass, ChargeMode.MAX_POWER, **_assist(**{CONF_MAX_STEP: 2}))
+    _idle_power(hass, **{BATTERY_POWER: 0, HOUSE: 3500, GRID: -3500})
+
+    first = await coordinator._async_update_data()
+    assert first["target_amps"] == round((5500 - 3500) / 240)
+
+    second = await coordinator._async_update_data()
+    assert second["target_amps"] == round((5500 - 3500) / 240) + 2
+
+    _set(hass, **{GRID: -9000})
+    dropped = await coordinator._async_update_data()
+    assert dropped["target_amps"] < second["target_amps"] - 2

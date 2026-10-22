@@ -550,7 +550,9 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         pv = self._get_sensor_value(self._entity(CONF_SOLAR_PRODUCTION_SENSOR))
         if pv is None:
             return 0.0
-        _charge_w, discharge_w = self._battery_flows()
+        charge_w, discharge_w = self._battery_flows()
+        if charge_w > 0:
+            return 0.0
         return battery_spare_watts(
             max_discharge_w=float(
                 self._opt(
@@ -664,6 +666,26 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._grid_available_power(),
             )
         return self._solar_amps(solar_surplus, floor=0), solar_surplus
+
+    def _ramped_supply_target(self, target: float) -> float:
+        """Climb onto battery spare a step at a time.
+
+        A reading of 0 W says nothing about whether the inverter will
+        discharge (an MPC can hold it in eco_charge). Jumping to the full
+        spare credit spiked import to 1.45 x In live; small steps keep any
+        miss within what the overshoot guard catches in two cycles.
+        """
+        if target <= self._last_target:
+            return target
+        if self._last_target <= 0:
+            voltage = self._get_voltage()
+            spare = self._battery_spare_watts()
+            headroom = self._grid_headroom_watts()
+            if headroom is None or voltage <= 0:
+                return 0
+            return min(target, max(0.0, headroom - spare) / voltage)
+        max_step = float(self._opt(CONF_MAX_STEP, DEFAULT_MAX_STEP))
+        return min(target, self._last_target + max_step)
 
     def _apply_step_limit(self, target: float) -> float:
         """Limit amps change per cycle to prevent oscillation."""
@@ -1197,7 +1219,9 @@ class EVChargeOptimizerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         target = self._solar_amps(solar_surplus, floor=0)
                         available_power = solar_surplus
             case ChargeMode.MAX_POWER | ChargeMode.BOOST:
-                target = min(self.max_amps, self._get_grid_available_amps())
+                target = self._ramped_supply_target(
+                    min(self.max_amps, self._get_grid_available_amps())
+                )
                 available_power = self._grid_available_power()
             case unreachable:
                 assert_never(unreachable)
