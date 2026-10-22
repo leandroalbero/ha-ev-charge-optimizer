@@ -6,6 +6,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -23,7 +24,7 @@ async def async_setup_entry(
 
 
 class OptimizerSwitch(
-    CoordinatorEntity[EVChargeOptimizerCoordinator], SwitchEntity
+    CoordinatorEntity[EVChargeOptimizerCoordinator], SwitchEntity, RestoreEntity
 ):
     """Switch to enable/disable the optimizer."""
 
@@ -43,6 +44,13 @@ class OptimizerSwitch(
             "name": "EV Charge Optimizer",
             "manufacturer": "EV Charge Optimizer",
         }
+
+    async def async_added_to_hass(self) -> None:
+        """Restore enabled/disabled across restarts."""
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is not None and last.state in ("on", "off"):
+            self.coordinator.enabled = last.state == "on"
 
     @property
     def is_on(self) -> bool:

@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
@@ -23,15 +22,17 @@ from homeassistant.helpers.selector import (
 
 from .const import (
     CONF_BATTERY_MIN_SOC,
+    CONF_BATTERY_POWER_POSITIVE_DISCHARGE,
     CONF_BATTERY_POWER_SENSOR,
     CONF_BATTERY_SOC_SENSOR,
-    CONF_EV_SOC_SENSOR,
-    CONF_EV_CHARGE_LIMIT_ENTITY,
-    CONF_EV_CHARGING_STATE_SENSOR,
     CONF_CHARGER_NUMBER_ENTITY,
     CONF_CHARGER_SWITCH_ENTITY,
     CONF_CHARGER_WAKE_ENTITY,
     CONF_DEFAULT_MODE,
+    CONF_EV_CHARGE_LIMIT_ENTITY,
+    CONF_EV_CHARGING_STATE_SENSOR,
+    CONF_EV_POWER_SENSOR,
+    CONF_EV_SOC_SENSOR,
     CONF_GRID_EXPORT_SENSOR,
     CONF_GRID_MAX_POWER,
     CONF_GUARANTEED_MIN_AMPS,
@@ -42,6 +43,8 @@ from .const import (
     CONF_POWER_BUFFER,
     CONF_PRIORITIZE_BATTERY,
     CONF_ROLLING_WINDOW,
+    CONF_SHED_LOADS,
+    CONF_SHED_MAX_MINUTES,
     CONF_SOLAR_PRODUCTION_SENSOR,
     CONF_STATIC_VOLTAGE,
     CONF_UPDATE_INTERVAL,
@@ -51,6 +54,7 @@ from .const import (
     CONF_VALLEY_TARGET_SOC,
     CONF_VOLTAGE_SENSOR,
     DEFAULT_BATTERY_MIN_SOC,
+    DEFAULT_BATTERY_POWER_POSITIVE_DISCHARGE,
     DEFAULT_GRID_MAX_POWER,
     DEFAULT_GUARANTEED_MIN_AMPS,
     DEFAULT_MAX_AMPS,
@@ -59,6 +63,7 @@ from .const import (
     DEFAULT_POWER_BUFFER,
     DEFAULT_PRIORITIZE_BATTERY,
     DEFAULT_ROLLING_WINDOW,
+    DEFAULT_SHED_MAX_MINUTES,
     DEFAULT_STATIC_VOLTAGE,
     DEFAULT_UPDATE_INTERVAL,
     DEFAULT_VALLEY_AMPS,
@@ -66,8 +71,8 @@ from .const import (
     DEFAULT_VALLEY_START,
     DEFAULT_VALLEY_TARGET_SOC,
     DOMAIN,
-    ChargeMode,
     MODE_LABELS,
+    ChargeMode,
 )
 
 CONF_DEFAULT_MODE = "default_mode"
@@ -117,6 +122,27 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                     ),
                     vol.Optional(CONF_EV_CHARGE_LIMIT_ENTITY): EntitySelector(
                         EntitySelectorConfig(domain=["number", "sensor"])
+                    ),
+                    vol.Optional(CONF_EV_POWER_SENSOR): EntitySelector(
+                        EntitySelectorConfig(domain="sensor")
+                    ),
+                    vol.Optional(CONF_BATTERY_POWER_POSITIVE_DISCHARGE): BooleanSelector(),
+                    vol.Optional(CONF_SHED_LOADS): EntitySelector(
+                        EntitySelectorConfig(
+                            domain=["switch", "light", "input_boolean"],
+                            multiple=True,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_SHED_MAX_MINUTES, default=DEFAULT_SHED_MAX_MINUTES
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=1,
+                            max=240,
+                            step=1,
+                            unit_of_measurement="min",
+                            mode=NumberSelectorMode.BOX,
+                        )
                     ),
                 }
             ),
@@ -301,6 +327,44 @@ class EVChargeOptimizerConfigFlow(ConfigFlow, domain=DOMAIN):
                         },
                     ): EntitySelector(
                         EntitySelectorConfig(domain=["number", "sensor"])
+                    ),
+                    vol.Optional(
+                        CONF_EV_POWER_SENSOR,
+                        description={
+                            "suggested_value": current.get(CONF_EV_POWER_SENSOR)
+                        },
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    vol.Optional(
+                        CONF_BATTERY_POWER_POSITIVE_DISCHARGE,
+                        default=current.get(
+                            CONF_BATTERY_POWER_POSITIVE_DISCHARGE,
+                            DEFAULT_BATTERY_POWER_POSITIVE_DISCHARGE,
+                        ),
+                    ): BooleanSelector(),
+                    vol.Optional(
+                        CONF_SHED_LOADS,
+                        description={
+                            "suggested_value": current.get(CONF_SHED_LOADS)
+                        },
+                    ): EntitySelector(
+                        EntitySelectorConfig(
+                            domain=["switch", "light", "input_boolean"],
+                            multiple=True,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_SHED_MAX_MINUTES,
+                        default=current.get(
+                            CONF_SHED_MAX_MINUTES, DEFAULT_SHED_MAX_MINUTES
+                        ),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=1,
+                            max=240,
+                            step=1,
+                            unit_of_measurement="min",
+                            mode=NumberSelectorMode.BOX,
+                        )
                     ),
                     vol.Optional(
                         CONF_BATTERY_POWER_SENSOR,
@@ -577,6 +641,44 @@ class EVChargeOptimizerOptionsFlow(OptionsFlow):
                         },
                     ): EntitySelector(
                         EntitySelectorConfig(domain=["number", "sensor"])
+                    ),
+                    vol.Optional(
+                        CONF_EV_POWER_SENSOR,
+                        description={
+                            "suggested_value": current.get(CONF_EV_POWER_SENSOR)
+                        },
+                    ): EntitySelector(EntitySelectorConfig(domain="sensor")),
+                    vol.Optional(
+                        CONF_BATTERY_POWER_POSITIVE_DISCHARGE,
+                        default=current.get(
+                            CONF_BATTERY_POWER_POSITIVE_DISCHARGE,
+                            DEFAULT_BATTERY_POWER_POSITIVE_DISCHARGE,
+                        ),
+                    ): BooleanSelector(),
+                    vol.Optional(
+                        CONF_SHED_LOADS,
+                        description={
+                            "suggested_value": current.get(CONF_SHED_LOADS)
+                        },
+                    ): EntitySelector(
+                        EntitySelectorConfig(
+                            domain=["switch", "light", "input_boolean"],
+                            multiple=True,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_SHED_MAX_MINUTES,
+                        default=current.get(
+                            CONF_SHED_MAX_MINUTES, DEFAULT_SHED_MAX_MINUTES
+                        ),
+                    ): NumberSelector(
+                        NumberSelectorConfig(
+                            min=1,
+                            max=240,
+                            step=1,
+                            unit_of_measurement="min",
+                            mode=NumberSelectorMode.BOX,
+                        )
                     ),
                 }
             ),

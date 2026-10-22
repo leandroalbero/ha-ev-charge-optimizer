@@ -12,7 +12,11 @@
           "battery_power_sensor": "Home Battery Power Sensor (optional, +charging/-discharging)",
           "ev_soc_sensor": "EV Battery SOC Sensor (optional, used by Valley target SOC)",
           "ev_charging_state_sensor": "EV Charging State Sensor (optional)",
-          "ev_charge_limit_entity": "EV Charge Limit (optional, number or sensor)"
+          "ev_charge_limit_entity": "EV Charge Limit (optional, number or sensor)",
+          "ev_power_sensor": "EV Power Sensor (optional, actual draw)",
+          "battery_power_positive_discharge": "Battery power is positive when discharging",
+          "shed_loads": "Loads to shed when the grid cap is binding (optional)",
+          "shed_max_minutes": "Max minutes a shed load stays off"
         }
       },
       "charger": {
@@ -45,7 +49,11 @@
       "reconfigure": {
         "data": {
           "ev_charging_state_sensor": "EV Charging State Sensor (optional)",
-          "ev_charge_limit_entity": "EV Charge Limit (optional, number or sensor)"
+          "ev_charge_limit_entity": "EV Charge Limit (optional, number or sensor)",
+          "ev_power_sensor": "EV Power Sensor (optional, actual draw)",
+          "battery_power_positive_discharge": "Battery power is positive when discharging",
+          "shed_loads": "Loads to shed when the grid cap is binding (optional)",
+          "shed_max_minutes": "Max minutes a shed load stays off"
         }
       }
     },
@@ -72,7 +80,11 @@
           "guaranteed_min_amps": "Guaranteed Min Amps (Top-up mode)",
           "grid_max_power": "Grid Max Power (W)",
           "ev_charging_state_sensor": "EV Charging State Sensor (optional)",
-          "ev_charge_limit_entity": "EV Charge Limit (optional, number or sensor)"
+          "ev_charge_limit_entity": "EV Charge Limit (optional, number or sensor)",
+          "ev_power_sensor": "EV Power Sensor (optional, actual draw)",
+          "battery_power_positive_discharge": "Battery power is positive when discharging",
+          "shed_loads": "Loads to shed when the grid cap is binding (optional)",
+          "shed_max_minutes": "Max minutes a shed load stays off"
         }
       }
     }
