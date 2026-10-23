@@ -13,6 +13,8 @@ A Home Assistant integration that optimizes EV charger power based on available 
 - **Max Power** — Charge at the maximum amps the grid cap allows, plus inverter supply when battery assist is configured. Load shedding stays in this mode and in Boost.
 - **Boost** — Same as Max Power, but the grid cap is a current above the contract for a bounded budget. See below. The only risk on 2.0TD is a trip; there is no excess-power penalty.
 
+<img width="1305" height="951" alt="image" src="https://github.com/user-attachments/assets/de8416b0-2e2d-4d6e-928d-fe7e8e8faff4" />
+
 ### Regulation Algorithm
 
 - Rolling average smoothing to handle cloud cover and transient loads
