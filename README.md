@@ -1,6 +1,6 @@
 # EV Charge Optimizer
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
 
 A Home Assistant integration that optimizes EV charger power based on available solar export, grid conditions, and time-of-use rates. Entity-based and charger-agnostic — works with any EV charger that exposes a number entity in Home Assistant.
 
@@ -32,11 +32,11 @@ A Home Assistant integration that optimizes EV charger power based on available 
 
 ### HACS (Recommended)
 
+EV Charge Optimizer is in the HACS default store.
+
 1. Open HACS in Home Assistant
-2. Click the three dots menu → **Custom repositories**
-3. Add this repository URL with category **Integration**
-4. Search for "EV Charge Optimizer" and install
-5. Restart Home Assistant
+2. Search for "EV Charge Optimizer" and install
+3. Restart Home Assistant
 
 ### Manual
 
