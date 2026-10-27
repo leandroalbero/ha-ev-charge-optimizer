@@ -47,6 +47,7 @@ from custom_components.ev_charge_optimizer.const import (
 )
 from custom_components.ev_charge_optimizer.coordinator import (
     EVChargeOptimizerCoordinator,
+    _now,
 )
 from custom_components.ev_charge_optimizer.number import MaxEvSocNumber
 from custom_components.ev_charge_optimizer.sensor import EVPowerSensor, ShedLoadsSensor
@@ -969,3 +970,17 @@ async def test_cheap_mode_leaves_battery_grid_charging_alone(
     hass.states.async_set(EV_POWER, "0", {"unit_of_measurement": "W"})
 
     assert coordinator._grid_headroom_watts() == pytest.approx(2000, abs=1)
+
+
+async def test_clock_follows_home_assistant_time_zone(
+    hass: HomeAssistant,
+    freezer: object,
+) -> None:
+    await hass.config.async_set_time_zone("Europe/Madrid")
+    freezer.move_to("2026-06-15 00:30:00+00:00")
+
+    now = _now()
+
+    assert now == datetime(2026, 6, 15, 2, 30, 0)
+    assert now.tzinfo is None
+    assert now != datetime.now()

@@ -13,6 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_BATTERY_MAX_DISCHARGE_W,
@@ -125,8 +126,9 @@ _KW_UNITS = frozenset({"kw", "kilowatt", "kilowatts"})
 
 
 def _now() -> datetime:
-    """Clock seam for the wake cooldown."""
-    return datetime.now()
+    """Clock seam: wall time in the Home Assistant time zone."""
+    # Kept naive: persisted runtime timestamps and forecast slots are naive.
+    return dt_util.now().replace(tzinfo=None)
 
 
 def _parse_hhmm(value: str):
