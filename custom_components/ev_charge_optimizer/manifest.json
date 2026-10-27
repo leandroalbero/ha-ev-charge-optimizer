@@ -1,7 +1,9 @@
 {
   "domain": "ev_charge_optimizer",
   "name": "EV Charge Optimizer",
-  "codeowners": ["@leandroalbero"],
+  "codeowners": [
+    "@leandroalbero"
+  ],
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/leandroalbero/ha-ev-charge-optimizer",
@@ -9,5 +11,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/leandroalbero/ha-ev-charge-optimizer/issues",
   "requirements": [],
-  "version": "1.14.1"
+  "version": "1.14.2"
 }
